@@ -2,6 +2,7 @@ package kgo_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -50,6 +51,7 @@ func TestPubSub(t *testing.T) {
 
 	done := make(chan bool, 1)
 	fn := func(msg broker.Event) error {
+		fmt.Printf("EEEE %s\n", msg.Message().Body)
 		done <- true
 		return msg.Ack()
 	}

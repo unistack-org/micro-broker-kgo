@@ -111,3 +111,9 @@ type hooksKey struct{}
 func Hooks(hooks ...kgo.Hook) broker.Option {
 	return broker.SetOption(hooksKey{}, hooks)
 }
+
+type optionsKey struct{}
+
+func Options(opts ...kgo.Opt) broker.Option {
+	return broker.SetOption(optionsKey{}, opts)
+}
