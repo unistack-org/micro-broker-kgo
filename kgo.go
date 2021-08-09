@@ -289,7 +289,7 @@ func (l *mlogger) Log(lvl kgo.LogLevel, msg string, args ...interface{}) {
 	default:
 		return
 	}
-	l.l.Fields(l.ctx, mlvl, msg, args...)
+	l.l.Fields(args...).Log(l.ctx, mlvl, msg)
 }
 
 func (l *mlogger) Level() kgo.LogLevel {
