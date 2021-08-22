@@ -4,17 +4,19 @@ package kgo
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	kgo "github.com/twmb/franz-go/pkg/kgo"
 	sasl "github.com/twmb/franz-go/pkg/sasl"
 	"github.com/unistack-org/micro/v3/broker"
 	"github.com/unistack-org/micro/v3/logger"
 	"github.com/unistack-org/micro/v3/metadata"
+	"github.com/unistack-org/micro/v3/util/id"
+	"golang.org/x/sync/errgroup"
 )
 
 type kBroker struct {
@@ -44,6 +46,7 @@ type publication struct {
 	err   error
 	sync.RWMutex
 	msg *broker.Message
+	ack bool
 }
 
 func (p *publication) Topic() string {
@@ -55,6 +58,7 @@ func (p *publication) Message() *broker.Message {
 }
 
 func (p *publication) Ack() error {
+	p.ack = true
 	return nil
 }
 
@@ -85,9 +89,6 @@ func (s *subscriber) Unsubscribe(ctx context.Context) error {
 }
 
 func (k *kBroker) Address() string {
-	if len(k.opts.Addrs) > 0 {
-		return k.opts.Addrs[0]
-	}
 	return strings.Join(k.opts.Addrs, ",")
 }
 
@@ -108,11 +109,21 @@ func (k *kBroker) Connect(ctx context.Context) error {
 		nctx = ctx
 	}
 
+	kaddrs := k.opts.Addrs
+
+	// shuffle addrs
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(kaddrs), func(i, j int) {
+		kaddrs[i], kaddrs[j] = kaddrs[j], kaddrs[i]
+	})
+
+	kopts := append(k.kopts, kgo.SeedBrokers(kaddrs...))
+
 	select {
 	case <-nctx.Done():
 		return nctx.Err()
 	default:
-		c, err := kgo.NewClient(k.kopts...)
+		c, err := kgo.NewClient(kopts...)
 		if err != nil {
 			return err
 		}
@@ -181,7 +192,8 @@ func (k *kBroker) Init(opts ...broker.Option) error {
 		return err
 	}
 
-	kopts := append(k.kopts, kgo.SeedBrokers(k.opts.Addrs...))
+	var kopts []kgo.Opt
+
 	if k.opts.Context != nil {
 		if v, ok := k.opts.Context.Value(optionsKey{}).([]kgo.Opt); ok && len(v) > 0 {
 			kopts = append(kopts, v...)
@@ -210,18 +222,18 @@ func (k *kBroker) Init(opts ...broker.Option) error {
 		if v, ok := k.opts.Context.Value(metadataMinAgeKey{}).(time.Duration); ok {
 			kopts = append(kopts, kgo.MetadataMinAge(v))
 		}
-		if v, ok := k.opts.Context.Value(produceRetriesKey{}).(int); ok {
-			kopts = append(kopts, kgo.ProduceRetries(v))
-		}
+		//	if v, ok := k.opts.Context.Value(produceRetriesKey{}).(int); ok {
+		//		kopts = append(kopts, kgo.ProduceRetries(v))
+		//		}
 		if v, ok := k.opts.Context.Value(requestRetriesKey{}).(int); ok {
 			kopts = append(kopts, kgo.RequestRetries(v))
 		}
-		if v, ok := k.opts.Context.Value(retryBackoffKey{}).(func(int) time.Duration); ok {
-			kopts = append(kopts, kgo.RetryBackoff(v))
-		}
-		if v, ok := k.opts.Context.Value(retryTimeoutKey{}).(func(int16) time.Duration); ok {
-			kopts = append(kopts, kgo.RetryTimeout(v))
-		}
+		///	if v, ok := k.opts.Context.Value(retryBackoffKey{}).(func(int) time.Duration); ok {
+		//		kopts = append(kopts, kgo.RetryBackoff(v))
+		//	}
+		//	if v, ok := k.opts.Context.Value(retryTimeoutKey{}).(func(int16) time.Duration); ok {
+		//		kopts = append(kopts, kgo.RetryTimeout(v))
+		//	}
 		if v, ok := k.opts.Context.Value(saslKey{}).([]sasl.Mechanism); ok {
 			kopts = append(kopts, kgo.SASL(v...))
 		}
@@ -229,6 +241,10 @@ func (k *kBroker) Init(opts ...broker.Option) error {
 			kopts = append(kopts, kgo.WithHooks(v...))
 		}
 	}
+	kopts = append(kopts,
+		//kgo.WithLogger(&mlogger{l: k.opts.Logger, ctx: k.opts.Context}),
+		kgo.RequiredAcks(kgo.AllISRAcks()),
+	)
 
 	k.kopts = kopts
 	k.init = true
@@ -252,6 +268,13 @@ func (k *kBroker) Publish(ctx context.Context, topic string, msg *broker.Message
 func (k *kBroker) publish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
 	records := make([]*kgo.Record, 0, len(msgs))
 	var errs []string
+
+	for _, msg := range msgs {
+		topic, _ := msg.Header.Get(metadata.HeaderTopic)
+		rec := &kgo.Record{Value: msg.Body, Topic: topic}
+		records = append(records, rec)
+	}
+
 	results := k.writer.ProduceSync(ctx, records...)
 	for _, result := range results {
 		if result.Err != nil {
@@ -261,6 +284,7 @@ func (k *kBroker) publish(ctx context.Context, msgs []*broker.Message, opts ...b
 	if len(errs) > 0 {
 		return fmt.Errorf("publish error: %s", strings.Join(errs, "\n"))
 	}
+
 	return nil
 }
 
@@ -310,19 +334,29 @@ func (k *kBroker) Subscribe(ctx context.Context, topic string, handler broker.Ha
 	options := broker.NewSubscribeOptions(opts...)
 
 	if options.Group == "" {
-		uid, err := uuid.NewRandom()
+		uid, err := id.New()
 		if err != nil {
 			return nil, err
 		}
-		options.Group = uid.String()
+		options.Group = uid
 	}
 
+	kaddrs := k.opts.Addrs
+
+	// shuffle addrs
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(kaddrs), func(i, j int) {
+		kaddrs[i], kaddrs[j] = kaddrs[j], kaddrs[i]
+	})
+
 	kopts := append(k.kopts,
+		kgo.SeedBrokers(kaddrs...),
 		kgo.ConsumerGroup(options.Group),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
-		kgo.WithLogger(&mlogger{l: k.opts.Logger, ctx: k.opts.Context}),
+		kgo.FetchMaxWait(1*time.Second),
+
 		// TODO: must set https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#OnRevoked
 	)
 
@@ -348,21 +382,22 @@ func (s *subscriber) run(ctx context.Context) {
 		case <-s.kopts.Context.Done():
 			return
 		default:
+			fmt.Printf("poll fetches\n")
 			fetches := s.reader.PollFetches(ctx)
+			fmt.Printf("fetches polled\n")
 			if fetches.IsClientClosed() {
+				fmt.Printf("CCCCCC\n")
 				return
 			}
 			fetches.EachError(func(t string, p int32, err error) {
 				s.kopts.Logger.Errorf(ctx, "fetch err topic %s partition %d: %v", t, p, err)
 			})
-
 			s.handleFetches(ctx, fetches)
 		}
 	}
 }
 
 func (s *subscriber) handleFetches(ctx context.Context, fetches kgo.Fetches) error {
-	var records []*kgo.Record
 	var batch bool
 	var err error
 
@@ -371,59 +406,84 @@ func (s *subscriber) handleFetches(ctx context.Context, fetches kgo.Fetches) err
 	}
 	_ = batch
 
+	mprecords := make(map[int32][]*kgo.Record)
+
+	cnt := 0
 	for _, fetch := range fetches {
 		for _, ftopic := range fetch.Topics {
-			ridx := 0
-			for {
-				for _, partition := range ftopic.Partitions {
-					if ridx >= len(partition.Records) {
-						continue
-					}
-					records = append(records, partition.Records[ridx])
-				}
+			for _, partition := range ftopic.Partitions {
+				mprecords[partition.Partition] = append(mprecords[partition.Partition], partition.Records...)
+				cnt += len(partition.Records)
+			}
+		}
+	}
 
-				for _, record := range records {
-					eh := s.kopts.ErrorHandler
-					if s.opts.ErrorHandler != nil {
-						eh = s.opts.ErrorHandler
-					}
-					p := &publication{topic: record.Topic, msg: &broker.Message{}}
+	// preallocate optimistic
+	crecords := make([]*kgo.Record, 0, cnt)
 
-					if s.opts.BodyOnly {
-						p.msg.Body = record.Value
-					} else {
-						if err := s.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
-							p.err = err
-							p.msg.Body = record.Value
-							if eh != nil {
-								_ = eh(p)
-							} else {
-								if s.kopts.Logger.V(logger.ErrorLevel) {
-									s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: failed to unmarshal: %v", err)
-								}
-							}
-							continue
-						}
-					}
-					err = s.handler(p)
-					if err == nil && s.opts.AutoAck {
-						records = append(records, record)
-					} else if err != nil {
+	eh := s.kopts.ErrorHandler
+	if s.opts.ErrorHandler != nil {
+		eh = s.opts.ErrorHandler
+	}
+
+	g := &errgroup.Group{}
+
+	for _, records := range mprecords {
+		precords := records
+		g.Go(func() error {
+			for _, record := range precords {
+				p := &publication{topic: record.Topic, msg: &broker.Message{}}
+				if s.opts.BodyOnly {
+					p.msg.Body = record.Value
+				} else {
+					if err := s.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
 						p.err = err
+						p.msg.Body = record.Value
 						if eh != nil {
 							_ = eh(p)
+							if p.ack {
+								crecords = append(crecords, record)
+							}
+							return nil
 						} else {
 							if s.kopts.Logger.V(logger.ErrorLevel) {
-								s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: subscriber error: %v", err)
+								s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: failed to unmarshal: %v", err)
 							}
 						}
+						return err
+					}
+				}
+				err = s.handler(p)
+				if err == nil && (s.opts.AutoAck || p.ack) {
+					crecords = append(crecords, record)
+				}
+				if err != nil {
+					p.err = err
+					if eh != nil {
+						_ = eh(p)
+					} else {
+						if s.kopts.Logger.V(logger.ErrorLevel) {
+							s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: subscriber error: %v", err)
+						}
+					}
+					if p.ack {
+						crecords = append(crecords, record)
 					}
 				}
 			}
-			ridx++
-		}
+			return nil
+		})
 	}
-	return s.reader.CommitRecords(ctx, records...)
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	if s.kopts.Logger.V(logger.DebugLevel) {
+		logger.Debugf(ctx, "commit %d records", len(crecords))
+	}
+
+	return s.reader.CommitRecords(ctx, crecords...)
 }
 
 func (k *kBroker) String() string {
