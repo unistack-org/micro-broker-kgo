@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,7 +38,12 @@ func TestPubSub(t *testing.T) {
 		addrs = strings.Split(addr, ",")
 	}
 
-	b := kgo.NewBroker(broker.Codec(jsoncodec.NewCodec()), broker.Addrs(addrs...), kgo.ClientID("test"))
+	b := kgo.NewBroker(
+		broker.Codec(jsoncodec.NewCodec()),
+		broker.Addrs(addrs...),
+		kgo.ClientID("test"),
+		kgo.CommitInterval(1*time.Second),
+	)
 	if err := b.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -51,27 +57,29 @@ func TestPubSub(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-
+	_ = bm
 	/*
-		fmt.Printf("prefill")
+			fmt.Printf("prefill")
 
-		msgs := make([]*broker.Message, 0, 600000)
-		for i := 0; i < 600000; i++ {
-			msgs = append(msgs, bm)
-		}
+			msgs := make([]*broker.Message, 0, 600000)
+			for i := 0; i < 600000; i++ {
+				msgs = append(msgs, bm)
+			}
 
-		if err := b.BatchPublish(ctx, msgs); err != nil {
-			t.Fatal(err)
-		}
+			if err := b.BatchPublish(ctx, msgs); err != nil {
+				t.Fatal(err)
+			}
+		t.Skip()
 	*/
 	done := make(chan bool, 1)
-	idx := 0
+	idx := int64(0)
 	fn := func(msg broker.Event) error {
-		idx++
+		atomic.AddInt64(&idx, 1)
+		//time.Sleep(200 * time.Millisecond)
 		return msg.Ack()
 	}
 
-	sub, err := b.Subscribe(ctx, "test", fn, broker.SubscribeAutoAck(true), broker.SubscribeGroup("test"), broker.SubscribeBodyOnly(true))
+	sub, err := b.Subscribe(ctx, "test", fn, broker.SubscribeAutoAck(true), broker.SubscribeGroup("test14"), broker.SubscribeBodyOnly(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +90,12 @@ func TestPubSub(t *testing.T) {
 	}()
 
 	for {
-		fmt.Printf("processed %v\n", idx)
+		if v := atomic.LoadInt64(&idx); v == 12637303 {
+			close(done)
+			break
+		} else {
+			fmt.Printf("processed %v\n", v)
+		}
 		time.Sleep(1 * time.Second)
 	}
 	<-done

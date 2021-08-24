@@ -1,5 +1,6 @@
-github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dgrijalva/jwt-go v3.2.0+incompatible/go.mod h1:E3ru+11k8xSBh+hMPgOLZmtrrCbhqsmaPHjLKYnJCaQ=
 github.com/ef-ds/deque v1.0.4/go.mod h1:gXDnTC3yqvBcHbq2lcExjtAcVrOnJCbMcZXmuj8Z4tg=
 github.com/golang-jwt/jwt/v4 v4.0.0/go.mod h1:/xlHOz8bRuivTWchD4jCa+NbatV+wEUSzwAxVc6locg=
@@ -36,10 +37,8 @@ github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81P
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.7.0 h1:nwc3DEeHmmLAfoZucVR881uASk0Mfjw8xYJ99tb5CcY=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
-github.com/twmb/franz-go v0.10.1 h1:z05pd/6cBy7ywBK9TIjGko1wa2F1zuFgmVPR6uil0ik=
-github.com/twmb/franz-go v0.10.1/go.mod h1:Qa6npC7EIi4WoLmnUz9Ue/sPL0k+ex4OyHCYJ2pCAqw=
-github.com/twmb/franz-go v0.10.2-0.20210820215004-4c20135fffc1 h1:JNd7gUA9uggKfso+hxeWg0CJbfM8yo124XH8tBv4v/E=
-github.com/twmb/franz-go v0.10.2-0.20210820215004-4c20135fffc1/go.mod h1:Qa6npC7EIi4WoLmnUz9Ue/sPL0k+ex4OyHCYJ2pCAqw=
+github.com/twmb/franz-go v0.10.2-0.20210823212011-0d01f7456b4d h1:O7QsIa7lVn+P60nsOBAjkajGKcOpaN3zsOGYboCgfs4=
+github.com/twmb/franz-go v0.10.2-0.20210823212011-0d01f7456b4d/go.mod h1:Qa6npC7EIi4WoLmnUz9Ue/sPL0k+ex4OyHCYJ2pCAqw=
 github.com/twmb/franz-go/pkg/kmsg v0.0.0-20210726202344-c376dbc9081f h1:Opx7EKsXb4IOPj1ammVNksPFpbXx6aaxdIn4hGjiIpk=
 github.com/twmb/franz-go/pkg/kmsg v0.0.0-20210726202344-c376dbc9081f/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
 github.com/twmb/go-rbtree v1.0.0 h1:KxN7dXJ8XaZ4cvmHV1qqXTshxX3EBvX/toG5+UR49Mg=

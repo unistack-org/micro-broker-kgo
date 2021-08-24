@@ -11,6 +11,11 @@ import (
 	"github.com/unistack-org/micro/v3/client"
 )
 
+var (
+	// DefaultCommitInterval specifies how fast send commit offsets to kafka
+	DefaultCommitInterval = 5 * time.Second
+)
+
 type subscribeContextKey struct{}
 
 // SubscribeContext set the context for broker.SubscribeOption
@@ -100,18 +105,25 @@ func RequestRetries(n int) broker.Option {
 	return broker.SetOption(requestRetriesKey{}, n)
 }
 
-type retryBackoffKey struct{}
+type retryBackoffFnKey struct{}
 
-// RetryBackoff set backoff func for retry
-func RetryBackoff(fn func(int) time.Duration) broker.Option {
-	return broker.SetOption(retryBackoffKey{}, fn)
+// RetryBackoffFn set backoff func for retry
+func RetryBackoffFn(fn func(int) time.Duration) broker.Option {
+	return broker.SetOption(retryBackoffFnKey{}, fn)
 }
 
 type retryTimeoutKey struct{}
 
 // RetryTimeout limit retry timeout
-func RetryTimeout(fn func(int16) time.Duration) broker.Option {
-	return broker.SetOption(retryTimeoutKey{}, fn)
+func RetryTimeout(td time.Duration) broker.Option {
+	return broker.SetOption(retryTimeoutKey{}, td)
+}
+
+type retryTimeoutFnKey struct{}
+
+// RetryTimeoutFn set func limit retry timeout
+func RetryTimeoutFn(fn func(int16) time.Duration) broker.Option {
+	return broker.SetOption(retryTimeoutFnKey{}, fn)
 }
 
 type saslKey struct{}
@@ -133,4 +145,11 @@ type optionsKey struct{}
 // Options pass additional options to broker
 func Options(opts ...kgo.Opt) broker.Option {
 	return broker.SetOption(optionsKey{}, opts)
+}
+
+type commitIntervalKey struct{}
+
+// CommitInterval specifies interval to send commits
+func CommitInterval(td time.Duration) broker.Option {
+	return broker.SetOption(commitIntervalKey{}, td)
 }

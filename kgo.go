@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kgo "github.com/twmb/franz-go/pkg/kgo"
@@ -16,6 +17,7 @@ import (
 	"github.com/unistack-org/micro/v3/logger"
 	"github.com/unistack-org/micro/v3/metadata"
 	"github.com/unistack-org/micro/v3/util/id"
+	mrand "github.com/unistack-org/micro/v3/util/rand"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -49,6 +51,10 @@ type publication struct {
 	ack bool
 }
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 func (p *publication) Topic() string {
 	return p.topic
 }
@@ -79,11 +85,15 @@ func (s *subscriber) Topic() string {
 }
 
 func (s *subscriber) Unsubscribe(ctx context.Context) error {
+	if s.closed {
+		return nil
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		s.reader.Close()
+		close(s.done)
+		s.closed = true
 	}
 	return nil
 }
@@ -112,7 +122,6 @@ func (k *kBroker) Connect(ctx context.Context) error {
 	kaddrs := k.opts.Addrs
 
 	// shuffle addrs
-	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(kaddrs), func(i, j int) {
 		kaddrs[i], kaddrs[j] = kaddrs[j], kaddrs[i]
 	})
@@ -228,12 +237,42 @@ func (k *kBroker) Init(opts ...broker.Option) error {
 		if v, ok := k.opts.Context.Value(requestRetriesKey{}).(int); ok {
 			kopts = append(kopts, kgo.RequestRetries(v))
 		}
-		///	if v, ok := k.opts.Context.Value(retryBackoffKey{}).(func(int) time.Duration); ok {
-		//		kopts = append(kopts, kgo.RetryBackoff(v))
-		//	}
-		//	if v, ok := k.opts.Context.Value(retryTimeoutKey{}).(func(int16) time.Duration); ok {
-		//		kopts = append(kopts, kgo.RetryTimeout(v))
-		//	}
+		if v, ok := k.opts.Context.Value(retryBackoffFnKey{}).(func(int) time.Duration); ok {
+			kopts = append(kopts, kgo.RetryBackoffFn(v))
+		} else {
+			kopts = append(kopts, kgo.RetryBackoffFn(
+				func() func(int) time.Duration {
+					var rng mrand.Rand
+					return func(fails int) time.Duration {
+						const (
+							min = 250 * time.Millisecond
+							max = 2 * time.Second
+						)
+						if fails <= 0 {
+							return min
+						}
+						if fails > 10 {
+							return max
+						}
+
+						backoff := min * time.Duration(1<<(fails-1))
+						jitter := 0.8 + 0.4*rng.Float64()
+						backoff = time.Duration(float64(backoff) * jitter)
+
+						if backoff > max {
+							return max
+						}
+						return backoff
+					}
+				}(),
+			))
+		}
+		if v, ok := k.opts.Context.Value(retryTimeoutFnKey{}).(func(int16) time.Duration); ok {
+			kopts = append(kopts, kgo.RetryTimeoutFn(v))
+		}
+		if v, ok := k.opts.Context.Value(retryTimeoutKey{}).(time.Duration); ok {
+			kopts = append(kopts, kgo.RetryTimeout(v))
+		}
 		if v, ok := k.opts.Context.Value(saslKey{}).([]sasl.Mechanism); ok {
 			kopts = append(kopts, kgo.SASL(v...))
 		}
@@ -242,8 +281,9 @@ func (k *kBroker) Init(opts ...broker.Option) error {
 		}
 	}
 	kopts = append(kopts,
-		//kgo.WithLogger(&mlogger{l: k.opts.Logger, ctx: k.opts.Context}),
+		kgo.WithLogger(&mlogger{l: k.opts.Logger, ctx: k.opts.Context}),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
+	//	kgo.RecordPartitioner(),
 	)
 
 	k.kopts = kopts
@@ -298,7 +338,7 @@ type mlogger struct {
 }
 
 func (l *mlogger) Log(lvl kgo.LogLevel, msg string, args ...interface{}) {
-	mlvl := logger.ErrorLevel
+	var mlvl logger.Level
 	switch lvl {
 	case kgo.LogLevelNone:
 		return
@@ -344,7 +384,6 @@ func (k *kBroker) Subscribe(ctx context.Context, topic string, handler broker.Ha
 	kaddrs := k.opts.Addrs
 
 	// shuffle addrs
-	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(kaddrs), func(i, j int) {
 		kaddrs[i], kaddrs[j] = kaddrs[j], kaddrs[i]
 	})
@@ -356,8 +395,11 @@ func (k *kBroker) Subscribe(ctx context.Context, topic string, handler broker.Ha
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
 		kgo.FetchMaxWait(1*time.Second),
-
-		// TODO: must set https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#OnRevoked
+		kgo.KeepControlRecords(),
+		kgo.Balancers(kgo.CooperativeStickyBalancer(), kgo.StickyBalancer()),
+		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
+	//	kgo.WithHooks(&metrics{meter: k.opts.Meter}),
+	// TODO: must set https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#OnRevoked
 	)
 
 	reader, err := kgo.NewClient(kopts...)
@@ -365,7 +407,7 @@ func (k *kBroker) Subscribe(ctx context.Context, topic string, handler broker.Ha
 		return nil, err
 	}
 
-	sub := &subscriber{opts: options, reader: reader, handler: handler, kopts: k.opts}
+	sub := &subscriber{done: make(chan struct{}), opts: options, reader: reader, handler: handler, kopts: k.opts}
 	go sub.run(ctx)
 
 	k.Lock()
@@ -382,17 +424,24 @@ func (s *subscriber) run(ctx context.Context) {
 		case <-s.kopts.Context.Done():
 			return
 		default:
-			fmt.Printf("poll fetches\n")
 			fetches := s.reader.PollFetches(ctx)
-			fmt.Printf("fetches polled\n")
 			if fetches.IsClientClosed() {
-				fmt.Printf("CCCCCC\n")
+				// TODO: fatal ?
 				return
 			}
-			fetches.EachError(func(t string, p int32, err error) {
-				s.kopts.Logger.Errorf(ctx, "fetch err topic %s partition %d: %v", t, p, err)
-			})
-			s.handleFetches(ctx, fetches)
+			if len(fetches.Errors()) > 0 {
+				for _, err := range fetches.Errors() {
+					s.kopts.Logger.Errorf(ctx, "fetch err topic %s partition %d: %v", err.Topic, err.Partition, err.Err)
+				}
+				// TODO: fatal ?
+				return
+			}
+
+			if err := s.handleFetches(ctx, fetches); err != nil {
+				s.kopts.Logger.Errorf(ctx, "fetch handler err: %v", err)
+				// TODO: fatal ?
+				//return
+			}
 		}
 	}
 }
@@ -408,66 +457,117 @@ func (s *subscriber) handleFetches(ctx context.Context, fetches kgo.Fetches) err
 
 	mprecords := make(map[int32][]*kgo.Record)
 
-	cnt := 0
+	cnt := int64(0)
 	for _, fetch := range fetches {
 		for _, ftopic := range fetch.Topics {
 			for _, partition := range ftopic.Partitions {
 				mprecords[partition.Partition] = append(mprecords[partition.Partition], partition.Records...)
-				cnt += len(partition.Records)
+				cnt += int64(len(partition.Records))
 			}
 		}
 	}
 
 	// preallocate optimistic
-	crecords := make([]*kgo.Record, 0, cnt)
+	crecords := make([]*kgo.Record, 0, 1000)
 
 	eh := s.kopts.ErrorHandler
 	if s.opts.ErrorHandler != nil {
 		eh = s.opts.ErrorHandler
 	}
 
-	g := &errgroup.Group{}
+	var mu sync.Mutex
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	td := DefaultCommitInterval
+	if s.kopts.Context != nil {
+		if v, ok := s.kopts.Context.Value(commitIntervalKey{}).(time.Duration); ok && v > 0 {
+			td = v
+		}
+	}
+
+	ticker := time.NewTicker(td)
+	defer ticker.Stop()
+
+	g.Go(func() error {
+		for {
+			select {
+			case <-gctx.Done():
+				return gctx.Err()
+			case <-s.done:
+				mu.Lock()
+				err := s.reader.CommitRecords(ctx, crecords...)
+				mu.Unlock()
+				return err
+			case <-ticker.C:
+				if atomic.LoadInt64(&cnt) == 0 {
+					return nil
+				}
+				mu.Lock()
+				if err := s.reader.CommitRecords(ctx, crecords...); err != nil {
+					mu.Unlock()
+					return err
+				}
+				atomic.AddInt64(&cnt, -int64(len(crecords)))
+				crecords = crecords[:]
+				mu.Unlock()
+			}
+		}
+	})
 
 	for _, records := range mprecords {
 		precords := records
 		g.Go(func() error {
 			for _, record := range precords {
-				p := &publication{topic: record.Topic, msg: &broker.Message{}}
-				if s.opts.BodyOnly {
-					p.msg.Body = record.Value
-				} else {
-					if err := s.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
-						p.err = err
+				select {
+				case <-s.done:
+					return nil
+				case <-gctx.Done():
+					return gctx.Err()
+				default:
+					p := &publication{topic: record.Topic, msg: &broker.Message{}}
+					if s.opts.BodyOnly {
 						p.msg.Body = record.Value
+					} else {
+						if err := s.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
+							p.err = err
+							p.msg.Body = record.Value
+							if eh != nil {
+								_ = eh(p)
+								if p.ack {
+									mu.Lock()
+									crecords = append(crecords, record)
+									mu.Unlock()
+								}
+								return nil
+							} else {
+								if s.kopts.Logger.V(logger.ErrorLevel) {
+									s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: failed to unmarshal: %v", err)
+								}
+							}
+							return err
+						}
+					}
+					err = s.handler(p)
+					if err == nil && (s.opts.AutoAck || p.ack) {
+						mu.Lock()
+						crecords = append(crecords, record)
+						mu.Unlock()
+					}
+					if err != nil {
+						p.err = err
 						if eh != nil {
 							_ = eh(p)
-							if p.ack {
-								crecords = append(crecords, record)
-							}
-							return nil
 						} else {
 							if s.kopts.Logger.V(logger.ErrorLevel) {
-								s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: failed to unmarshal: %v", err)
+								s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: subscriber error: %v", err)
 							}
 						}
-						return err
-					}
-				}
-				err = s.handler(p)
-				if err == nil && (s.opts.AutoAck || p.ack) {
-					crecords = append(crecords, record)
-				}
-				if err != nil {
-					p.err = err
-					if eh != nil {
-						_ = eh(p)
-					} else {
-						if s.kopts.Logger.V(logger.ErrorLevel) {
-							s.kopts.Logger.Errorf(s.kopts.Context, "[kgo]: subscriber error: %v", err)
+						if p.ack {
+							mu.Lock()
+							crecords = append(crecords, record)
+							mu.Unlock()
 						}
-					}
-					if p.ack {
-						crecords = append(crecords, record)
 					}
 				}
 			}
