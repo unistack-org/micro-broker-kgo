@@ -2,7 +2,6 @@ package kgo_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -40,9 +39,8 @@ func TestPubSub(t *testing.T) {
 	b := kgo.NewBroker(
 		broker.Codec(jsoncodec.NewCodec()),
 		broker.Addrs(addrs...),
-		kgo.ClientID("test"),
-		kgo.CommitInterval(1*time.Second),
-		kgo.Options(kg.FetchMaxBytes(10*1024)),
+		kgo.CommitInterval(5*time.Second),
+		kgo.Options(kg.ClientID("test"), kg.FetchMaxBytes(10*1024*1024)),
 	)
 	if err := b.Init(); err != nil {
 		t.Fatal(err)
@@ -57,10 +55,8 @@ func TestPubSub(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	_ = bm
-	/*
-			fmt.Printf("prefill")
 
+/*
 			msgs := make([]*broker.Message, 0, 600000)
 			for i := 0; i < 600000; i++ {
 				msgs = append(msgs, bm)
@@ -70,7 +66,7 @@ func TestPubSub(t *testing.T) {
 				t.Fatal(err)
 			}
 		t.Skip()
-	*/
+*/
 	done := make(chan bool, 1)
 	idx := int64(0)
 	fn := func(msg broker.Event) error {
@@ -79,7 +75,10 @@ func TestPubSub(t *testing.T) {
 		return msg.Ack()
 	}
 
-	sub, err := b.Subscribe(ctx, "test", fn, broker.SubscribeAutoAck(true), broker.SubscribeGroup("test17"), broker.SubscribeBodyOnly(true))
+	sub, err := b.Subscribe(ctx, "test", fn,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test23"),
+		broker.SubscribeBodyOnly(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,14 +88,16 @@ func TestPubSub(t *testing.T) {
 		}
 	}()
 
-	for {
-		if v := atomic.LoadInt64(&idx); v == 12637303 {
-			close(done)
-			break
-		} else {
-			fmt.Printf("processed %v\n", v)
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				close(done)
+			}
 		}
-		time.Sleep(1 * time.Second)
-	}
+	}()
 	<-done
 }
