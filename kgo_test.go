@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	kg "github.com/twmb/franz-go/pkg/kgo"
 	kgo "github.com/unistack-org/micro-broker-kgo/v3"
 	jsoncodec "github.com/unistack-org/micro-codec-json/v3"
 	"github.com/unistack-org/micro/v3/broker"
@@ -16,12 +17,10 @@ import (
 	"github.com/unistack-org/micro/v3/metadata"
 )
 
-var (
-	bm = &broker.Message{
-		Header: map[string]string{"hkey": "hval", metadata.HeaderTopic: "test"},
-		Body:   []byte(`"body"`),
-	}
-)
+var bm = &broker.Message{
+	Header: map[string]string{"hkey": "hval", metadata.HeaderTopic: "test"},
+	Body:   []byte(`"body"`),
+}
 
 func TestPubSub(t *testing.T) {
 	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
@@ -43,6 +42,7 @@ func TestPubSub(t *testing.T) {
 		broker.Addrs(addrs...),
 		kgo.ClientID("test"),
 		kgo.CommitInterval(1*time.Second),
+		kgo.Options(kg.FetchMaxBytes(10*1024)),
 	)
 	if err := b.Init(); err != nil {
 		t.Fatal(err)
@@ -75,11 +75,11 @@ func TestPubSub(t *testing.T) {
 	idx := int64(0)
 	fn := func(msg broker.Event) error {
 		atomic.AddInt64(&idx, 1)
-		//time.Sleep(200 * time.Millisecond)
+		// time.Sleep(200 * time.Millisecond)
 		return msg.Ack()
 	}
 
-	sub, err := b.Subscribe(ctx, "test", fn, broker.SubscribeAutoAck(true), broker.SubscribeGroup("test14"), broker.SubscribeBodyOnly(true))
+	sub, err := b.Subscribe(ctx, "test", fn, broker.SubscribeAutoAck(true), broker.SubscribeGroup("test17"), broker.SubscribeBodyOnly(true))
 	if err != nil {
 		t.Fatal(err)
 	}
