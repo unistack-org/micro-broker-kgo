@@ -40,10 +40,10 @@ const (
 
 	metricBrokerThrottleLatencies = "broker_throttle_latencies"
 
-	metricBrokerProduceBytesCompressed   = "produce_bytes_compressed_total"
-	metricBrokerProduceBytesUncompressed = "produce_bytes_uncompressed_total"
-	metricBrokerFetchBytesUncompressed   = "broker_fetch_bytes_uncompressed_total"
-	metricBrokerFetchBytesCompressed     = "broker_fetch_bytes_compressed_total"
+	metricBrokerProduceBytesCompressed   = "broker_produce_bytes_compressed_total"
+	metricBrokerProduceBytesUncompressed = "broker_produce_bytes_uncompressed_total"
+	metricBrokerFetchBytesCompressed     = "broker_consume_bytes_compressed_total"
+	metricBrokerFetchBytesUncompressed   = "broker_consume_bytes_uncompressed_total"
 
 	metricBrokerGroupErrors = "broker_group_errors_total"
 
