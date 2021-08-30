@@ -1,240 +1,113 @@
 package kgo
 
-/*
 import (
 	"net"
-	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/unistack-org/micro/v3/meter"
 )
 
 type metrics struct {
 	meter meter.Meter
-
-	connects    *prometheus.CounterVec
-	connectErrs *prometheus.CounterVec
-	disconnects *prometheus.CounterVec
-
-	writeErrs    *prometheus.CounterVec
-	writeBytes   *prometheus.CounterVec
-	writeWaits   *prometheus.HistogramVec
-	writeTimings *prometheus.HistogramVec
-
-	readErrs    *prometheus.CounterVec
-	readBytes   *prometheus.CounterVec
-	readWaits   *prometheus.HistogramVec
-	readTimings *prometheus.HistogramVec
-
-	throttles *prometheus.HistogramVec
-
-	produceBatchesUncompressed *prometheus.CounterVec
-	produceBatchesCompressed   *prometheus.CounterVec
-
-	fetchBatchesUncompressed *prometheus.CounterVec
-	fetchBatchesCompressed   *prometheus.CounterVec
 }
 
 var (
 	_ kgo.HookBrokerConnect       = &metrics{}
 	_ kgo.HookBrokerDisconnect    = &metrics{}
-	_ kgo.HookBrokerE2E           = &metrics{}
 	_ kgo.HookBrokerRead          = &metrics{}
 	_ kgo.HookBrokerThrottle      = &metrics{}
 	_ kgo.HookBrokerWrite         = &metrics{}
 	_ kgo.HookFetchBatchRead      = &metrics{}
 	_ kgo.HookProduceBatchWritten = &metrics{}
-
-	/*
-		HookFetchRecordBuffered
-		HookFetchRecordUnbuffered
-		HookGroupManageError
-		HookNewClient
-		HookProduceRecordBuffered
-		HookProduceRecordUnbuffered
-*/
-/*
+	_ kgo.HookGroupManageError    = &metrics{}
 )
 
-func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+const (
+	metricBrokerConnects    = "broker_connects_total"
+	metricBrokerDisconnects = "broker_disconnects_total"
+
+	metricBrokerWriteErrors        = "broker_write_errors_total"
+	metricBrokerWriteBytes         = "broker_write_bytes_total"
+	metricBrokerWriteWaitLatencies = "broker_write_wait_latencies"
+	metricBrokerWriteLatencies     = "broker_write_latencies"
+
+	metricBrokerReadErrors        = "broker_read_errors_total"
+	metricBrokerReadBytes         = "broker_read_bytes_total"
+	metricBrokerReadWaitLatencies = "broker_read_wait_latencies"
+	metricBrokerReadLatencies     = "broker_read_latencies"
+
+	metricBrokerThrottleLatencies = "broker_throttle_latencies"
+
+	metricBrokerProduceBytesCompressed   = "produce_bytes_compressed_total"
+	metricBrokerProduceBytesUncompressed = "produce_bytes_uncompressed_total"
+	metricBrokerFetchBytesUncompressed   = "broker_fetch_bytes_uncompressed_total"
+	metricBrokerFetchBytesCompressed     = "broker_fetch_bytes_compressed_total"
+
+	metricBrokerGroupErrors = "broker_group_errors_total"
+
+	labelNode    = "node_id"
+	labelSuccess = "success"
+	labelFaulure = "failure"
+	labelStatus  = "status"
+	labelTopic   = "topic"
+)
+
+func (m *metrics) OnGroupManageError(err error) {
+	m.meter.Counter(metricBrokerGroupErrors).Inc()
+}
+
+func (m *metrics) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	node := strconv.Itoa(int(meta.NodeID))
 	if err != nil {
-		m.connectErrs.WithLabelValues(node).Inc()
+		m.meter.Counter(metricBrokerConnects, labelNode, node, labelStatus, labelFaulure).Inc()
 		return
 	}
-	m.connects.WithLabelValues(node).Inc()
+	m.meter.Counter(metricBrokerConnects, labelNode, node, labelStatus, labelSuccess).Inc()
 }
 
-func (m *Metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
+func (m *metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
 	node := strconv.Itoa(int(meta.NodeID))
-	m.disconnects.WithLabelValues(node).Inc()
+	m.meter.Counter(metricBrokerDisconnects, labelNode, node).Inc()
 }
 
-func (m *Metrics) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error) {
+func (m *metrics) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error) {
 	node := strconv.Itoa(int(meta.NodeID))
 	if err != nil {
-		m.writeErrs.WithLabelValues(node).Inc()
+		m.meter.Counter(metricBrokerWriteErrors, labelNode, node).Inc()
 		return
 	}
-	m.writeBytes.WithLabelValues(node).Add(float64(bytesWritten))
-	m.writeWaits.WithLabelValues(node).Observe(writeWait.Seconds())
-	m.writeTimings.WithLabelValues(node).Observe(timeToWrite.Seconds())
+	m.meter.Counter(metricBrokerWriteBytes, labelNode, node).Add(bytesWritten)
+	m.meter.Histogram(metricBrokerWriteWaitLatencies, labelNode, node).Update(writeWait.Seconds())
+	m.meter.Histogram(metricBrokerWriteLatencies, labelNode, node).Update(timeToWrite.Seconds())
 }
 
-func (m *Metrics) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, readWait, timeToRead time.Duration, err error) {
+func (m *metrics) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, readWait, timeToRead time.Duration, err error) {
 	node := strconv.Itoa(int(meta.NodeID))
 	if err != nil {
-		m.readErrs.WithLabelValues(node).Inc()
+		m.meter.Counter(metricBrokerReadErrors, labelNode, node).Inc()
 		return
 	}
-	m.readBytes.WithLabelValues(node).Add(float64(bytesRead))
-	m.readWaits.WithLabelValues(node).Observe(readWait.Seconds())
-	m.readTimings.WithLabelValues(node).Observe(timeToRead.Seconds())
+	m.meter.Counter(metricBrokerReadBytes, labelNode, node).Add(bytesRead)
+
+	m.meter.Histogram(metricBrokerReadWaitLatencies, labelNode, node).Update(readWait.Seconds())
+	m.meter.Histogram(metricBrokerReadLatencies, labelNode, node).Update(timeToRead.Seconds())
 }
 
-func (m *Metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
+func (m *metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
 	node := strconv.Itoa(int(meta.NodeID))
-	m.throttles.WithLabelValues(node).Observe(throttleInterval.Seconds())
+	m.meter.Histogram(metricBrokerThrottleLatencies, labelNode, node).Update(throttleInterval.Seconds())
 }
 
-func (m *Metrics) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, _ int32, metrics kgo.ProduceBatchMetrics) {
+func (m *metrics) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, _ int32, kmetrics kgo.ProduceBatchMetrics) {
 	node := strconv.Itoa(int(meta.NodeID))
-	m.produceBatchesUncompressed.WithLabelValues(node, topic).Add(float64(metrics.UncompressedBytes))
-	m.produceBatchesCompressed.WithLabelValues(node, topic).Add(float64(metrics.CompressedBytes))
+	m.meter.Counter(metricBrokerProduceBytesUncompressed, labelNode, node, labelTopic, topic).Add(kmetrics.UncompressedBytes)
+	m.meter.Counter(metricBrokerProduceBytesCompressed, labelNode, node, labelTopic, topic).Add(kmetrics.CompressedBytes)
 }
 
-func (m *Metrics) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int32, metrics kgo.FetchBatchMetrics) {
+func (m *metrics) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int32, kmetrics kgo.FetchBatchMetrics) {
 	node := strconv.Itoa(int(meta.NodeID))
-	m.fetchBatchesUncompressed.WithLabelValues(node, topic).Add(float64(metrics.UncompressedBytes))
-	m.fetchBatchesCompressed.WithLabelValues(node, topic).Add(float64(metrics.CompressedBytes))
+	m.meter.Counter(metricBrokerFetchBytesUncompressed, labelNode, node, labelTopic, topic).Add(kmetrics.UncompressedBytes)
+	m.meter.Counter(metricBrokerFetchBytesCompressed, labelNode, node, labelTopic, topic).Add(kmetrics.CompressedBytes)
 }
-
-func NewMetrics(namespace string) (m *Metrics) {
-	reg := prometheus.NewRegistry()
-	factory := promauto.With(reg)
-
-	reg.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-	reg.MustRegister(prometheus.NewGoCollector())
-
-	return &Metrics{
-		reg: reg,
-
-		// connects and disconnects
-
-		connects: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "connects_total",
-			Help:      "Total number of connections opened, by broker",
-		}, []string{"node_id"}),
-
-		connectErrs: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "connect_errors_total",
-			Help:      "Total number of connection errors, by broker",
-		}, []string{"node_id"}),
-
-		disconnects: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "disconnects_total",
-			Help:      "Total number of connections closed, by broker",
-		}, []string{"node_id"}),
-
-		// write
-
-		writeErrs: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "write_errors_total",
-			Help:      "Total number of write errors, by broker",
-		}, []string{"node_id"}),
-
-		writeBytes: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "write_bytes_total",
-			Help:      "Total number of bytes written, by broker",
-		}, []string{"node_id"}),
-
-		writeWaits: factory.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "write_wait_latencies",
-			Help:      "Latency of time spent waiting to write to Kafka, in seconds by broker",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 1.5, 20),
-		}, []string{"node_id"}),
-
-		writeTimings: factory.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "write_latencies",
-			Help:      "Latency of time spent writing to Kafka, in seconds by broker",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 1.5, 20),
-		}, []string{"node_id"}),
-
-		// read
-
-		readErrs: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "read_errors_total",
-			Help:      "Total number of read errors, by broker",
-		}, []string{"node_id"}),
-
-		readBytes: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "read_bytes_total",
-			Help:      "Total number of bytes read, by broker",
-		}, []string{"node_id"}),
-
-		readWaits: factory.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "read_wait_latencies",
-			Help:      "Latency of time spent waiting to read from Kafka, in seconds by broker",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 1.5, 20),
-		}, []string{"node_id"}),
-
-		readTimings: factory.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "read_latencies",
-			Help:      "Latency of time spent reading from Kafka, in seconds by broker",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 1.5, 20),
-		}, []string{"node_id"}),
-
-		// throttles
-
-		throttles: factory.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "throttle_latencies",
-			Help:      "Latency of Kafka request throttles, in seconds by broker",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 1.5, 20),
-		}, []string{"node_id"}),
-
-		// produces & consumes
-
-		produceBatchesUncompressed: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "produce_bytes_uncompressed_total",
-			Help:      "Total number of uncompressed bytes produced, by broker and topic",
-		}, []string{"broker", "topic"}),
-
-		produceBatchesCompressed: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "produce_bytes_compressed_total",
-			Help:      "Total number of compressed bytes actually produced, by topic and partition",
-		}, []string{"topic", "partition"}),
-
-		fetchBatchesUncompressed: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "fetch_bytes_uncompressed_total",
-			Help:      "Total number of uncompressed bytes fetched, by topic and partition",
-		}, []string{"topic", "partition"}),
-
-		fetchBatchesCompressed: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "fetch_bytes_compressed_total",
-			Help:      "Total number of compressed bytes actually fetched, by topic and partition",
-		}, []string{"topic", "partition"}),
-	}
-}
-
-*/

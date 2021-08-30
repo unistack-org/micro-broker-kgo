@@ -341,7 +341,7 @@ func (k *kBroker) Subscribe(ctx context.Context, topic string, handler broker.Ha
 		// kgo.KeepControlRecords(),
 		kgo.Balancers(kgo.CooperativeStickyBalancer(), kgo.StickyBalancer()),
 		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
-	//	kgo.WithHooks(&metrics{meter: k.opts.Meter}),
+		kgo.WithHooks(&metrics{meter: k.opts.Meter}),
 	// TODO: must set https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#OnRevoked
 	)
 
