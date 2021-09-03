@@ -17,6 +17,12 @@ import (
 	"github.com/unistack-org/micro/v3/metadata"
 )
 
+var (
+	msgcnt  = int64(12000000)
+	group   = "32"
+	prefill = false
+)
+
 var bm = &broker.Message{
 	Header: map[string]string{"hkey": "hval", metadata.HeaderTopic: "test"},
 	Body:   []byte(`"body"`),
@@ -56,18 +62,17 @@ func TestPubSub(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
+	if prefill {
+		msgs := make([]*broker.Message, 0, msgcnt)
+		for i := int64(0); i < msgcnt; i++ {
+			msgs = append(msgs, bm)
+		}
 
-	/*
-			msgs := make([]*broker.Message, 0, 600000)
-			for i := 0; i < 600000; i++ {
-				msgs = append(msgs, bm)
-			}
-
-			if err := b.BatchPublish(ctx, msgs); err != nil {
-				t.Fatal(err)
-			}
-		t.Skip()
-	*/
+		if err := b.BatchPublish(ctx, msgs); err != nil {
+			t.Fatal(err)
+		}
+		//	t.Skip()
+	}
 	done := make(chan bool, 1)
 	idx := int64(0)
 	fn := func(msg broker.Event) error {
@@ -78,7 +83,7 @@ func TestPubSub(t *testing.T) {
 
 	sub, err := b.Subscribe(ctx, "test", fn,
 		broker.SubscribeAutoAck(true),
-		broker.SubscribeGroup("test29"),
+		broker.SubscribeGroup(group),
 		broker.SubscribeBodyOnly(true))
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +103,11 @@ func TestPubSub(t *testing.T) {
 		for {
 			select {
 			case <-pticker.C:
-				fmt.Printf("processed %v\n", atomic.LoadInt64(&idx))
+				if prc := atomic.LoadInt64(&idx); prc == msgcnt {
+					close(done)
+				} else {
+					fmt.Printf("processed %v\n", prc)
+				}
 			case <-ticker.C:
 				close(done)
 			}
