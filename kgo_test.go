@@ -19,9 +19,10 @@ import (
 )
 
 var (
-	msgcnt  = int64(12000000)
-	group   = "32"
-	prefill = false
+	msgcnt   = int64(12000000)
+	group    = "38"
+	prefill  = false
+	loglevel = logger.InfoLevel
 )
 
 var bm = &broker.Message{
@@ -34,7 +35,7 @@ func TestPubSub(t *testing.T) {
 		t.Skip()
 	}
 
-	if err := logger.DefaultLogger.Init(logger.WithLevel(logger.TraceLevel), logger.WithCallerSkipCount(3)); err != nil {
+	if err := logger.DefaultLogger.Init(logger.WithLevel(loglevel), logger.WithCallerSkipCount(3)); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

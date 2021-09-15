@@ -50,7 +50,6 @@ func (s *subscriber) run(ctx context.Context) {
 				return
 			}
 
-			s.kopts.Logger.Infof(ctx, "handle fetches")
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 				s.Lock()
 				consumers := s.consumers[p.Topic]
@@ -88,7 +87,7 @@ func (s *subscriber) assigned(ctx context.Context, _ *kgo.Client, assigned map[s
 		for _, partition := range partitions {
 			w := worker{
 				done:         make(chan struct{}),
-				recs:         make(chan []*kgo.Record, maxInflight),
+				recs:         make(chan []*kgo.Record),
 				cherr:        make(chan error),
 				kopts:        s.kopts,
 				opts:         s.opts,
@@ -130,6 +129,7 @@ func (w *worker) handle() {
 		eh = w.opts.ErrorHandler
 	}
 
+	paused := false
 	for {
 		select {
 		case <-w.ctx.Done():
@@ -138,7 +138,8 @@ func (w *worker) handle() {
 		case <-w.done:
 			return
 		case recs := <-w.recs:
-			if len(recs) == w.maxInflight {
+			if len(recs) >= w.maxInflight {
+				paused = true
 				w.reader.PauseFetchPartitions(w.tpmap)
 			}
 			for _, record := range recs {
@@ -189,8 +190,10 @@ func (w *worker) handle() {
 				}
 				pPool.Put(p)
 			}
-
-			w.reader.ResumeFetchPartitions(w.tpmap)
+			if paused {
+				paused = false
+				w.reader.ResumeFetchPartitions(w.tpmap)
+			}
 		}
 	}
 }
