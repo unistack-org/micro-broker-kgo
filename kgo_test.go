@@ -10,11 +10,12 @@ import (
 	"time"
 
 	kg "github.com/twmb/franz-go/pkg/kgo"
-	kgo "github.com/unistack-org/micro-broker-kgo/v3"
 	jsoncodec "github.com/unistack-org/micro-codec-json/v3"
 	"github.com/unistack-org/micro/v3/broker"
 	"github.com/unistack-org/micro/v3/logger"
 	"github.com/unistack-org/micro/v3/metadata"
+
+	kgo "github.com/unistack-org/micro-broker-kgo/v3"
 )
 
 var (
@@ -33,7 +34,9 @@ func TestPubSub(t *testing.T) {
 		t.Skip()
 	}
 
-	logger.DefaultLogger.Init(logger.WithLevel(logger.TraceLevel), logger.WithCallerSkipCount(3))
+	if err := logger.DefaultLogger.Init(logger.WithLevel(logger.TraceLevel), logger.WithCallerSkipCount(3)); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 
 	var addrs []string

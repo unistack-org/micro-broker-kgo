@@ -54,3 +54,12 @@ type commitIntervalKey struct{}
 func CommitInterval(td time.Duration) broker.Option {
 	return broker.SetOption(commitIntervalKey{}, td)
 }
+
+var DefaultSubscribeMaxInflight = 1000
+
+type subscribeMaxInflightKey struct{}
+
+// SubscribeMaxInFlight specifies interval to send commits
+func SubscribeMaxInFlight(n int) broker.SubscribeOption {
+	return broker.SetSubscribeOption(subscribeMaxInflightKey{}, n)
+}
