@@ -2,12 +2,15 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	kgo "github.com/twmb/franz-go/pkg/kgo"
 	"github.com/unistack-org/micro/v3/broker"
 	"github.com/unistack-org/micro/v3/logger"
 )
+
+var ErrLostMessage = errors.New("message not marked for offsets commit and will be lost in next iteration")
 
 var pPool = sync.Pool{
 	New: func() interface{} {
@@ -44,7 +47,7 @@ func (s *subscriber) run(ctx context.Context) {
 			}
 			if len(fetches.Errors()) > 0 {
 				for _, err := range fetches.Errors() {
-					s.kopts.Logger.Errorf(ctx, "fetch err topic %s partition %d: %v", err.Topic, err.Partition, err.Err)
+					s.kopts.Logger.Fatalf(ctx, "fetch err topic %s partition %d: %v", err.Topic, err.Partition, err.Err)
 				}
 				// TODO: fatal ?
 				return
@@ -62,6 +65,9 @@ func (s *subscriber) run(ctx context.Context) {
 					return
 				}
 				select {
+				case err := <-w.cherr:
+					s.kopts.Logger.Fatalf(ctx, "handle err: %v", err)
+					return
 				case w.recs <- p.Records:
 				case <-w.done:
 				}
@@ -159,6 +165,10 @@ func (w *worker) handle() {
 							_ = eh(p)
 							if p.ack {
 								w.reader.MarkCommitRecords(record)
+							} else {
+								w.cherr <- ErrLostMessage
+								pPool.Put(p)
+								return
 							}
 							pPool.Put(p)
 							continue
@@ -186,9 +196,13 @@ func (w *worker) handle() {
 					}
 				}
 				if p.ack {
+					pPool.Put(p)
 					w.reader.MarkCommitRecords(record)
+				} else {
+					pPool.Put(p)
+					w.cherr <- ErrLostMessage
+					return
 				}
-				pPool.Put(p)
 			}
 			if paused {
 				paused = false
