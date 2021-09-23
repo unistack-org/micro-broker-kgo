@@ -19,6 +19,8 @@ import (
 	mrand "github.com/unistack-org/micro/v3/util/rand"
 )
 
+var _ broker.Broker = &kBroker{}
+
 type kBroker struct {
 	writer    *kgo.Client // used only to push messages
 	kopts     []kgo.Opt
@@ -245,19 +247,23 @@ func (k *kBroker) publish(ctx context.Context, msgs []*broker.Message, opts ...b
 	records := make([]*kgo.Record, 0, len(msgs))
 	var errs []string
 	var err error
-	var buf []byte
 
 	for _, msg := range msgs {
+		rec := &kgo.Record{}
+		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
 		if options.BodyOnly {
-			buf = msg.Body
+			rec.Value = msg.Body
+		} else if k.opts.Codec.String() == "noop" {
+			rec.Value = msg.Body
+			for k, v := range msg.Header {
+				rec.Headers = append(rec.Headers, kgo.RecordHeader{Key: k, Value: []byte(v)})
+			}
 		} else {
-			buf, err = k.opts.Codec.Marshal(msg)
+			rec.Value, err = k.opts.Codec.Marshal(msg)
 			if err != nil {
 				return err
 			}
 		}
-		topic, _ := msg.Header.Get(metadata.HeaderTopic)
-		rec := &kgo.Record{Value: buf, Topic: topic}
 		records = append(records, rec)
 	}
 
@@ -390,8 +396,11 @@ func (k *kBroker) String() string {
 	return "kgo"
 }
 
-func NewBroker(opts ...broker.Option) broker.Broker {
+func NewBroker(opts ...broker.Option) *kBroker {
 	options := broker.NewOptions(opts...)
+	if options.Codec.String() != "noop" {
+		options.Logger.Infof(options.Context, "broker codec not noop, disable plain kafka headers usage")
+	}
 	kopts := []kgo.Opt{
 		kgo.DisableIdempotentWrite(),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),

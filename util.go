@@ -8,6 +8,7 @@ import (
 	kgo "github.com/twmb/franz-go/pkg/kgo"
 	"github.com/unistack-org/micro/v3/broker"
 	"github.com/unistack-org/micro/v3/logger"
+	"github.com/unistack-org/micro/v3/metadata"
 )
 
 var ErrLostMessage = errors.New("message not marked for offsets commit and will be lost in next iteration")
@@ -157,6 +158,12 @@ func (w *worker) handle() {
 				p.ack = false
 				if w.opts.BodyOnly {
 					p.msg.Body = record.Value
+				} else if w.kopts.Codec.String() == "noop" {
+					p.msg.Body = record.Value
+					p.msg.Header = metadata.New(len(record.Headers))
+					for _, h := range record.Headers {
+						p.msg.Header.Set(h.Key, string(h.Value))
+					}
 				} else {
 					if err := w.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
 						p.err = err
