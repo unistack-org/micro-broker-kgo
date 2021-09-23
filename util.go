@@ -15,7 +15,7 @@ var ErrLostMessage = errors.New("message not marked for offsets commit and will 
 
 var pPool = sync.Pool{
 	New: func() interface{} {
-		return &publication{msg: &broker.Message{}}
+		return &publication{msg: broker.NewMessage("")}
 	},
 }
 
