@@ -1,5 +1,5 @@
 // Package kgo provides a kafka broker using kgo
-package kgo
+package kgo // import "go.unistack.org/micro-broker-kgo/v3"
 
 import (
 	"context"
