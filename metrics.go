@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/unistack-org/micro/v3/meter"
+	"go.unistack.org/micro/v3/meter"
 )
 
 type metrics struct {

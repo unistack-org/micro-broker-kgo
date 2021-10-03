@@ -6,9 +6,9 @@ import (
 	"sync"
 
 	kgo "github.com/twmb/franz-go/pkg/kgo"
-	"github.com/unistack-org/micro/v3/broker"
-	"github.com/unistack-org/micro/v3/logger"
-	"github.com/unistack-org/micro/v3/metadata"
+	"go.unistack.org/micro/v3/broker"
+	"go.unistack.org/micro/v3/logger"
+	"go.unistack.org/micro/v3/metadata"
 )
 
 var ErrLostMessage = errors.New("message not marked for offsets commit and will be lost in next iteration")

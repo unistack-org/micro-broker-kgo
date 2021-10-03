@@ -5,8 +5,8 @@ import (
 	"time"
 
 	kgo "github.com/twmb/franz-go/pkg/kgo"
-	"github.com/unistack-org/micro/v3/broker"
-	"github.com/unistack-org/micro/v3/client"
+	"go.unistack.org/micro/v3/broker"
+	"go.unistack.org/micro/v3/client"
 )
 
 // DefaultCommitInterval specifies how fast send commit offsets to kafka

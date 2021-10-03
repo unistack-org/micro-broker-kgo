@@ -12,11 +12,11 @@ import (
 	kgo "github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
-	"github.com/unistack-org/micro/v3/broker"
-	"github.com/unistack-org/micro/v3/logger"
-	"github.com/unistack-org/micro/v3/metadata"
-	"github.com/unistack-org/micro/v3/util/id"
-	mrand "github.com/unistack-org/micro/v3/util/rand"
+	"go.unistack.org/micro/v3/broker"
+	"go.unistack.org/micro/v3/logger"
+	"go.unistack.org/micro/v3/metadata"
+	"go.unistack.org/micro/v3/util/id"
+	mrand "go.unistack.org/micro/v3/util/rand"
 )
 
 var _ broker.Broker = &kBroker{}

@@ -10,12 +10,10 @@ import (
 	"time"
 
 	kg "github.com/twmb/franz-go/pkg/kgo"
-	jsoncodec "github.com/unistack-org/micro-codec-json/v3"
-	"github.com/unistack-org/micro/v3/broker"
-	"github.com/unistack-org/micro/v3/logger"
-	"github.com/unistack-org/micro/v3/metadata"
-
-	kgo "github.com/unistack-org/micro-broker-kgo/v3"
+	kgo "go.unistack.org/micro-broker-kgo/v3"
+	"go.unistack.org/micro/v3/broker"
+	"go.unistack.org/micro/v3/logger"
+	"go.unistack.org/micro/v3/metadata"
 )
 
 var (
@@ -48,7 +46,6 @@ func TestPubSub(t *testing.T) {
 	}
 
 	b := kgo.NewBroker(
-		broker.Codec(jsoncodec.NewCodec()),
 		broker.Addrs(addrs...),
 		kgo.CommitInterval(5*time.Second),
 		kgo.Options(kg.ClientID("test"), kg.FetchMaxBytes(10*1024*1024)),
