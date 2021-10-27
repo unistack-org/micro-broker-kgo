@@ -59,7 +59,7 @@ var DefaultSubscribeMaxInflight = 1000
 
 type subscribeMaxInflightKey struct{}
 
-// SubscribeMaxInFlight specifies interval to send commits
+// SubscribeMaxInFlight max queued messages
 func SubscribeMaxInFlight(n int) broker.SubscribeOption {
 	return broker.SetSubscribeOption(subscribeMaxInflightKey{}, n)
 }
