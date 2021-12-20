@@ -7,6 +7,7 @@ import (
 	kgo "github.com/twmb/franz-go/pkg/kgo"
 	"go.unistack.org/micro/v3/broker"
 	"go.unistack.org/micro/v3/client"
+	"go.unistack.org/micro/v3/server"
 )
 
 // DefaultCommitInterval specifies how fast send commit offsets to kafka
@@ -36,6 +37,36 @@ type optionsKey struct{}
 // Options pass additional options to broker
 func Options(opts ...kgo.Opt) broker.Option {
 	return func(o *broker.Options) {
+		if o.Context == nil {
+			o.Context = context.Background()
+		}
+		options, ok := o.Context.Value(optionsKey{}).([]kgo.Opt)
+		if !ok {
+			options = make([]kgo.Opt, 0, len(opts))
+		}
+		options = append(options, opts...)
+		o.Context = context.WithValue(o.Context, optionsKey{}, options)
+	}
+}
+
+// SubscribeOptions pass additional options to broker
+func SubscribeOptions(opts ...kgo.Opt) broker.SubscribeOption {
+	return func(o *broker.SubscribeOptions) {
+		if o.Context == nil {
+			o.Context = context.Background()
+		}
+		options, ok := o.Context.Value(optionsKey{}).([]kgo.Opt)
+		if !ok {
+			options = make([]kgo.Opt, 0, len(opts))
+		}
+		options = append(options, opts...)
+		o.Context = context.WithValue(o.Context, optionsKey{}, options)
+	}
+}
+
+// SubscriberOptions pass additional options to broker
+func SubscriberOptions(opts ...kgo.Opt) server.SubscriberOption {
+	return func(o *server.SubscriberOptions) {
 		if o.Context == nil {
 			o.Context = context.Background()
 		}
