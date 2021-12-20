@@ -158,6 +158,14 @@ func (w *worker) handle() {
 				p.ack = false
 				if w.opts.BodyOnly {
 					p.msg.Body = record.Value
+					if l := len(record.Headers); l > 0 {
+						if p.msg.Header == nil {
+							p.msg.Header = metadata.New(l)
+						}
+						for _, h := range record.Headers {
+							p.msg.Header.Set(h.Key, string(h.Value))
+						}
+					}
 				} else if w.kopts.Codec.String() == "noop" {
 					p.msg.Body = record.Value
 					p.msg.Header = metadata.New(len(record.Headers))
@@ -168,6 +176,14 @@ func (w *worker) handle() {
 					if err := w.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
 						p.err = err
 						p.msg.Body = record.Value
+						if l := len(record.Headers); l > 0 {
+							if p.msg.Header == nil {
+								p.msg.Header = metadata.New(l)
+							}
+							for _, h := range record.Headers {
+								p.msg.Header.Set(h.Key, string(h.Value))
+							}
+						}
 						if eh != nil {
 							_ = eh(p)
 							if p.ack {
@@ -187,6 +203,14 @@ func (w *worker) handle() {
 						pPool.Put(p)
 						w.cherr <- err
 						return
+					}
+					if l := len(record.Headers); l > 0 {
+						if p.msg.Header == nil {
+							p.msg.Header = metadata.New(l)
+						}
+						for _, h := range record.Headers {
+							p.msg.Header.Set(h.Key, string(h.Value))
+						}
 					}
 				}
 				err = w.handler(p)
