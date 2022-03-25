@@ -83,8 +83,8 @@ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UV
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/stretchr/testify v1.5.1/go.mod h1:5W2xD1RspED5o8YsWQXVCued0rvSQ+mT+I5cxcmMvtA=
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
-github.com/twmb/franz-go v1.4.1 h1:6mMewlLoNuhEA0VTQpiaBjHLe73OJtIQjxM+AfASLzU=
-github.com/twmb/franz-go v1.4.1/go.mod h1:GFlQnHkJkC7gBoZRW3Sj1mWLPc8nkGW1ZcofBFzI8ss=
+github.com/twmb/franz-go v1.4.2 h1:IFODFa111Wf5+5L5XOymWS2HIL47yFzbgbA2yQFkUAk=
+github.com/twmb/franz-go v1.4.2/go.mod h1:GFlQnHkJkC7gBoZRW3Sj1mWLPc8nkGW1ZcofBFzI8ss=
 github.com/twmb/franz-go/pkg/kmsg v1.0.0 h1:dQdaXLDUEb+XkSUqw2/GvMEGdw1o89X2fOiFjlhztyA=
 github.com/twmb/franz-go/pkg/kmsg v1.0.0/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
 github.com/twmb/go-rbtree v1.0.0 h1:KxN7dXJ8XaZ4cvmHV1qqXTshxX3EBvX/toG5+UR49Mg=
