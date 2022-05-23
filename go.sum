@@ -76,12 +76,10 @@ github.com/stoewer/go-strcase v1.2.0/go.mod h1:IBiWB2sKIp3wVVQ3Y035++gc+knqhUQag
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.5.1/go.mod h1:5W2xD1RspED5o8YsWQXVCued0rvSQ+mT+I5cxcmMvtA=
-github.com/twmb/franz-go v1.5.2 h1:2IwsTronFdgTtyitQxTL8WE0xrPiev1A77i5ps09Pmc=
-github.com/twmb/franz-go v1.5.2/go.mod h1:ZKQ5AtqBbdc783bLCay7nDc21lJnIIA8mFJYhLMF19E=
+github.com/twmb/franz-go v1.5.3 h1:uhknJZs/fiANWcyTqYMKxAtOPYb1xkC22y5dRKewlvo=
+github.com/twmb/franz-go v1.5.3/go.mod h1:eqHYpAuvlTArOdZ1XtPYyOQ1uUb40CSZwbpL3ccjibI=
 github.com/twmb/franz-go/pkg/kmsg v1.0.0 h1:dQdaXLDUEb+XkSUqw2/GvMEGdw1o89X2fOiFjlhztyA=
 github.com/twmb/franz-go/pkg/kmsg v1.0.0/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
-github.com/twmb/go-rbtree v1.0.0 h1:KxN7dXJ8XaZ4cvmHV1qqXTshxX3EBvX/toG5+UR49Mg=
-github.com/twmb/go-rbtree v1.0.0/go.mod h1:UlIAI8gu3KRPkXSobZnmJfVwCJgEhD/liWzT5ppzIyc=
 github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f/go.mod h1:N2zxlSyiKSe5eX1tZViRH5QA0qijqEDrYZiPEAiq3wU=
 github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415/go.mod h1:GwrjFmJcFw6At/Gs6z4yjiIwzuJ1/+UwLxMQDVQXShQ=
 github.com/xeipuuv/gojsonschema v1.2.0/go.mod h1:anYRn/JVcOK2ZgGU+IjEV4nwlhoK5sQluxsYJ78Id3Y=
