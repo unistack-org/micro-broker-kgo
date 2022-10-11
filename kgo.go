@@ -262,7 +262,7 @@ func (k *kBroker) publish(ctx context.Context, msgs []*broker.Message, opts ...b
 	}
 
 	for _, msg := range msgs {
-		rec := &kgo.Record{Key: key}
+		rec := &kgo.Record{Context: ctx, Key: key}
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
 		if k.opts.Codec.String() == "noop" {
 			rec.Value = msg.Body
