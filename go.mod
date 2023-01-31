@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/twmb/franz-go v1.10.4
-	github.com/twmb/franz-go/pkg/kmsg v1.2.0
+	github.com/twmb/franz-go/pkg/kmsg v1.3.0
 	go.unistack.org/micro/v3 v3.10.5
 )
 
