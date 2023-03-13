@@ -28,6 +28,23 @@ var bm = &broker.Message{
 	Body:   []byte(`"body"`),
 }
 
+func TestConnect(t *testing.T) {
+	var addrs []string
+	ctx := context.TODO()
+	b := kgo.NewBroker(
+		broker.Addrs(addrs...),
+		kgo.CommitInterval(5*time.Second),
+		kgo.Options(kg.ClientID("test"), kg.FetchMaxBytes(10*1024*1024)),
+	)
+	if err := b.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPubSub(t *testing.T) {
 	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
 		t.Skip()
