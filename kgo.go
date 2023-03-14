@@ -220,7 +220,7 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 	}
 
 	for _, msg := range msgs {
-		rec := &kgo.Record{Key: key}
+		rec := &kgo.Record{Context: ctx, Key: key}
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
 		if options.BodyOnly {
 			rec.Value = msg.Body
