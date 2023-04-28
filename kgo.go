@@ -262,15 +262,15 @@ func (k *kBroker) publish(ctx context.Context, msgs []*broker.Message, opts ...b
 	}
 
 	for _, msg := range msgs {
-		rec := &kgo.Record{Key: key}
+		rec := &kgo.Record{Context: ctx, Key: key}
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
-		if options.BodyOnly {
-			rec.Value = msg.Body
-		} else if k.opts.Codec.String() == "noop" {
+		if k.opts.Codec.String() == "noop" {
 			rec.Value = msg.Body
 			for k, v := range msg.Header {
 				rec.Headers = append(rec.Headers, kgo.RecordHeader{Key: k, Value: []byte(v)})
 			}
+		} else if options.BodyOnly {
+			rec.Value = msg.Body
 		} else {
 			rec.Value, err = k.opts.Codec.Marshal(msg)
 			if err != nil {
