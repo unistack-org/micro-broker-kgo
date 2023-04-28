@@ -10,10 +10,10 @@ import (
 	"time"
 
 	kg "github.com/twmb/franz-go/pkg/kgo"
-	kgo "go.unistack.org/micro-broker-kgo/v3"
-	"go.unistack.org/micro/v3/broker"
-	"go.unistack.org/micro/v3/logger"
-	"go.unistack.org/micro/v3/metadata"
+	kgo "go.unistack.org/micro-broker-kgo/v4"
+	"go.unistack.org/micro/v4/broker"
+	"go.unistack.org/micro/v4/logger"
+	"go.unistack.org/micro/v4/metadata"
 )
 
 var (

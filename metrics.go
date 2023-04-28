@@ -6,9 +6,44 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v3/meter"
+	"go.unistack.org/micro/v4/meter"
 )
 
+/*
+	func NewServerSubscriberWrapper(opts ...Option) server.SubscriberWrapper {
+		handler := &wrapper{
+			opts: NewOptions(opts...),
+		}
+		return handler.SubscriberFunc
+	}
+
+	func (w *wrapper) SubscriberFunc(fn server.SubscriberFunc) server.SubscriberFunc {
+		return func(ctx context.Context, msg server.Message) error {
+			endpoint := msg.Topic()
+
+			labels := make([]string, 0, 4)
+			labels = append(labels, labelEndpoint, endpoint)
+
+			w.opts.Meter.Counter(SubscribeMessageInflight, labels...).Inc()
+			ts := time.Now()
+			err := fn(ctx, msg)
+			te := time.Since(ts)
+			w.opts.Meter.Counter(SubscribeMessageInflight, labels...).Dec()
+
+			w.opts.Meter.Summary(SubscribeMessageLatencyMicroseconds, labels...).Update(te.Seconds())
+			w.opts.Meter.Histogram(SubscribeMessageDurationSeconds, labels...).Update(te.Seconds())
+
+			if err == nil {
+				labels = append(labels, labelStatus, labelSuccess)
+			} else {
+				labels = append(labels, labelStatus, labelFailure)
+			}
+			w.opts.Meter.Counter(SubscribeMessageTotal, labels...).Inc()
+
+			return err
+		}
+	}
+*/
 type metrics struct {
 	meter meter.Meter
 }

@@ -1,5 +1,5 @@
 // Package kgo provides a kafka broker using kgo
-package kgo // import "go.unistack.org/micro-broker-kgo/v3"
+package kgo // import "go.unistack.org/micro-broker-kgo/v4"
 
 import (
 	"context"
@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v3/broker"
-	"go.unistack.org/micro/v3/metadata"
-	id "go.unistack.org/micro/v3/util/id"
-	mrand "go.unistack.org/micro/v3/util/rand"
+	"go.unistack.org/micro/v4/broker"
+	"go.unistack.org/micro/v4/metadata"
+	id "go.unistack.org/micro/v4/util/id"
+	mrand "go.unistack.org/micro/v4/util/rand"
 )
 
 var _ broker.Broker = &Broker{}
@@ -212,16 +212,21 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 	var errs []string
 	var err error
 	var key []byte
+	var promise func(*kgo.Record, error)
 
 	if options.Context != nil {
 		if k, ok := options.Context.Value(publishKey{}).([]byte); ok && k != nil {
 			key = k
+		}
+		if p, ok := options.Context.Value(publishPromiseKey{}).(func(*kgo.Record, error)); ok && p != nil {
+			promise = p
 		}
 	}
 
 	for _, msg := range msgs {
 		rec := &kgo.Record{Context: ctx, Key: key}
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
+		k.opts.Meter.Counter(broker.PublishMessageInflight, "endpoint", rec.Topic).Inc()
 		if options.BodyOnly {
 			rec.Value = msg.Body
 		} else if k.opts.Codec.String() == "noop" {
@@ -238,10 +243,36 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		records = append(records, rec)
 	}
 
+	if promise != nil {
+		ts := time.Now()
+		for _, rec := range records {
+			k.c.Produce(ctx, rec, func(r *kgo.Record, err error) {
+				te := time.Since(ts)
+				k.opts.Meter.Counter(broker.PublishMessageInflight, "endpoint", rec.Topic).Dec()
+				k.opts.Meter.Summary(broker.PublishMessageLatencyMicroseconds, "endpoint", r.Topic).Update(te.Seconds())
+				k.opts.Meter.Histogram(broker.PublishMessageDurationSeconds, "endpoint", r.Topic).Update(te.Seconds())
+				if err != nil {
+					k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "failure").Inc()
+				} else {
+					k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "success").Inc()
+				}
+				promise(r, err)
+			})
+		}
+		return nil
+	}
+	ts := time.Now()
 	results := k.c.ProduceSync(ctx, records...)
+	te := time.Since(ts)
 	for _, result := range results {
+		k.opts.Meter.Summary(broker.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic).Update(te.Seconds())
+		k.opts.Meter.Histogram(broker.PublishMessageDurationSeconds, "endpoint", result.Record.Topic).Update(te.Seconds())
+		k.opts.Meter.Counter(broker.PublishMessageInflight, "endpoint", result.Record.Topic).Dec()
 		if result.Err != nil {
+			k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", result.Record.Topic, "status", "failure").Inc()
 			errs = append(errs, result.Err.Error())
+		} else {
+			k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", result.Record.Topic, "status", "success").Inc()
 		}
 	}
 

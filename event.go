@@ -3,7 +3,7 @@ package kgo
 import (
 	"sync"
 
-	"go.unistack.org/micro/v3/broker"
+	"go.unistack.org/micro/v4/broker"
 )
 
 type event struct {
