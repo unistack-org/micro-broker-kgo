@@ -55,7 +55,6 @@ type Broker struct {
 	c         *kgo.Client
 	kopts     []kgo.Opt
 	connected bool
-	init      bool
 	sync.RWMutex
 	opts broker.Options
 	subs []*subscriber
@@ -351,7 +350,6 @@ func (k *Broker) String() string {
 }
 
 func NewBroker(opts ...broker.Option) *Broker {
-	rand.Seed(time.Now().Unix())
 	options := broker.NewOptions(opts...)
 
 	kaddrs := options.Addrs

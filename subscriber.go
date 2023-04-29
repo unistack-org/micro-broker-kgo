@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.unistack.org/micro/v4/broker"
@@ -163,6 +164,8 @@ func (pc *consumer) consume() {
 			return
 		case p := <-pc.recs:
 			for _, record := range p.Records {
+				ts := time.Now()
+				pc.kopts.Meter.Counter(broker.SubscribeMessageInflight, "endpoint", record.Topic).Inc()
 				p := eventPool.Get().(*event)
 				p.msg.Header = nil
 				p.msg.Body = nil
@@ -179,30 +182,45 @@ func (pc *consumer) consume() {
 					p.msg.Body = record.Value
 				} else {
 					if err := pc.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
+						pc.kopts.Meter.Counter(broker.SubscribeMessageTotal, "endpoint", record.Topic, "status", "failure").Inc()
 						p.err = err
 						p.msg.Body = record.Value
 						if eh != nil {
 							_ = eh(p)
+							pc.kopts.Meter.Counter(broker.SubscribeMessageInflight, "endpoint", record.Topic).Dec()
 							if p.ack {
 								pc.c.MarkCommitRecords(record)
 							} else {
 								eventPool.Put(p)
-								pc.kopts.Logger.Infof(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
+								pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
 								return
 							}
 							eventPool.Put(p)
+							te := time.Since(ts)
+							pc.kopts.Meter.Summary(broker.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic).Update(te.Seconds())
+							pc.kopts.Meter.Histogram(broker.SubscribeMessageDurationSeconds, "endpoint", record.Topic).Update(te.Seconds())
 							continue
 						} else {
 							if pc.kopts.Logger.V(logger.ErrorLevel) {
 								pc.kopts.Logger.Errorf(pc.kopts.Context, "[kgo]: failed to unmarshal: %v", err)
 							}
 						}
+						te := time.Since(ts)
+						pc.kopts.Meter.Counter(broker.SubscribeMessageInflight, "endpoint", record.Topic).Dec()
+						pc.kopts.Meter.Summary(broker.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic).Update(te.Seconds())
+						pc.kopts.Meter.Histogram(broker.SubscribeMessageDurationSeconds, "endpoint", record.Topic).Update(te.Seconds())
 						eventPool.Put(p)
-						pc.kopts.Logger.Infof(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
+						pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
 						return
 					}
 				}
 				err := pc.handler(p)
+				if err == nil {
+					pc.kopts.Meter.Counter(broker.SubscribeMessageTotal, "endpoint", record.Topic, "status", "success").Inc()
+				} else {
+					pc.kopts.Meter.Counter(broker.SubscribeMessageTotal, "endpoint", record.Topic, "status", "failure").Inc()
+				}
+				pc.kopts.Meter.Counter(broker.SubscribeMessageInflight, "endpoint", record.Topic).Dec()
 				if err == nil && pc.opts.AutoAck {
 					p.ack = true
 				} else if err != nil {
@@ -215,6 +233,9 @@ func (pc *consumer) consume() {
 						}
 					}
 				}
+				te := time.Since(ts)
+				pc.kopts.Meter.Summary(broker.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic).Update(te.Seconds())
+				pc.kopts.Meter.Histogram(broker.SubscribeMessageDurationSeconds, "endpoint", record.Topic).Update(te.Seconds())
 				if p.ack {
 					eventPool.Put(p)
 					pc.c.MarkCommitRecords(record)
