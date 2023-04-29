@@ -10,10 +10,10 @@ import (
 	"time"
 
 	kg "github.com/twmb/franz-go/pkg/kgo"
-	kgo "go.unistack.org/micro-broker-kgo/v3"
-	"go.unistack.org/micro/v3/broker"
-	"go.unistack.org/micro/v3/logger"
-	"go.unistack.org/micro/v3/metadata"
+	kgo "go.unistack.org/micro-broker-kgo/v4"
+	"go.unistack.org/micro/v4/broker"
+	"go.unistack.org/micro/v4/logger"
+	"go.unistack.org/micro/v4/metadata"
 )
 
 var (
@@ -26,6 +26,23 @@ var (
 var bm = &broker.Message{
 	Header: map[string]string{"hkey": "hval", metadata.HeaderTopic: "test"},
 	Body:   []byte(`"body"`),
+}
+
+func TestConnect(t *testing.T) {
+	var addrs []string
+	ctx := context.TODO()
+	b := kgo.NewBroker(
+		broker.Addrs(addrs...),
+		kgo.CommitInterval(5*time.Second),
+		kgo.Options(kg.ClientID("test"), kg.FetchMaxBytes(10*1024*1024)),
+	)
+	if err := b.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPubSub(t *testing.T) {

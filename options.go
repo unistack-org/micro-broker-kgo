@@ -4,10 +4,9 @@ import (
 	"context"
 	"time"
 
-	kgo "github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v3/broker"
-	"go.unistack.org/micro/v3/client"
-	"go.unistack.org/micro/v3/server"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"go.unistack.org/micro/v4/broker"
+	"go.unistack.org/micro/v4/client"
 )
 
 // DefaultCommitInterval specifies how fast send commit offsets to kafka
@@ -49,24 +48,9 @@ func Options(opts ...kgo.Opt) broker.Option {
 	}
 }
 
-// SubscribeOptions pass additional options to broker
+// SubscribeOptions pass additional options to broker in Subscribe
 func SubscribeOptions(opts ...kgo.Opt) broker.SubscribeOption {
 	return func(o *broker.SubscribeOptions) {
-		if o.Context == nil {
-			o.Context = context.Background()
-		}
-		options, ok := o.Context.Value(optionsKey{}).([]kgo.Opt)
-		if !ok {
-			options = make([]kgo.Opt, 0, len(opts))
-		}
-		options = append(options, opts...)
-		o.Context = context.WithValue(o.Context, optionsKey{}, options)
-	}
-}
-
-// SubscriberOptions pass additional options to broker
-func SubscriberOptions(opts ...kgo.Opt) server.SubscriberOption {
-	return func(o *server.SubscriberOptions) {
 		if o.Context == nil {
 			o.Context = context.Background()
 		}
@@ -86,11 +70,23 @@ func CommitInterval(td time.Duration) broker.Option {
 	return broker.SetOption(commitIntervalKey{}, td)
 }
 
-var DefaultSubscribeMaxInflight = 1000
+var DefaultSubscribeMaxInflight = 10
 
 type subscribeMaxInflightKey struct{}
 
 // SubscribeMaxInFlight max queued messages
 func SubscribeMaxInFlight(n int) broker.SubscribeOption {
 	return broker.SetSubscribeOption(subscribeMaxInflightKey{}, n)
+}
+
+type publishPromiseKey struct{}
+
+// PublishPromise set the kafka promise func for Produce
+func PublishPromise(fn func(*kgo.Record, error)) broker.PublishOption {
+	return broker.SetPublishOption(publishPromiseKey{}, fn)
+}
+
+// ClientPublishKey set the kafka message key (client option)
+func ClientPublishPromise(fn func(*kgo.Record, error)) client.PublishOption {
+	return client.SetPublishOption(publishPromiseKey{}, fn)
 }
