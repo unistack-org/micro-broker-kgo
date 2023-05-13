@@ -55,6 +55,12 @@ func (s *subscriber) Unsubscribe(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+		s.c.PauseFetchTopics(s.topic)
+		kc := make(map[string][]int32)
+		for ctp := range s.consumers {
+			kc[ctp.t] = append(kc[ctp.t], ctp.p)
+		}
+		s.killConsumers(ctx, kc)
 		close(s.done)
 		s.closed = true
 	}
@@ -71,15 +77,14 @@ func (s *subscriber) poll(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.c.Close()
+			s.c.CloseAllowingRebalance()
 			return
 		case <-s.done:
-			s.c.Close()
+			s.c.CloseAllowingRebalance()
 			return
 		default:
 			fetches := s.c.PollRecords(ctx, maxInflight)
-			if fetches.IsClientClosed() {
-				s.kopts.Logger.Errorf(ctx, "[kgo] client closed")
+			if !s.closed && fetches.IsClientClosed() {
 				s.closed = true
 				return
 			}
