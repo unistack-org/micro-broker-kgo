@@ -30,11 +30,11 @@ func (l *mlogger) Log(lvl kgo.LogLevel, msg string, args ...interface{}) {
 		return
 	}
 	if len(args) > 0 {
-		fields := make(map[string]interface{}, int(len(args)/2))
+		fields := make([]interface{}, len(args))
 		for i := 0; i <= len(args)/2; i += 2 {
-			fields[fmt.Sprintf("%v", args[i])] = args[i+1]
+			fields = append(fields, fmt.Sprintf("%v", args[i]), args[i+1])
 		}
-		l.l.Fields(fields).Log(l.ctx, mlvl, msg)
+		l.l.Fields(fields...).Log(l.ctx, mlvl, msg)
 	} else {
 		l.l.Log(l.ctx, mlvl, msg)
 	}
