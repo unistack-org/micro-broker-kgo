@@ -63,6 +63,18 @@ func SubscribeOptions(opts ...kgo.Opt) broker.SubscribeOption {
 	}
 }
 
+type clientIDKey struct{}
+
+func ClientID(id string) broker.Option {
+	return broker.SetOption(clientIDKey{}, id)
+}
+
+type groupKey struct{}
+
+func Group(id string) broker.Option {
+	return broker.SetOption(groupKey{}, id)
+}
+
 type commitIntervalKey struct{}
 
 // CommitInterval specifies interval to send commits
@@ -77,4 +89,16 @@ type subscribeMaxInflightKey struct{}
 // SubscribeMaxInFlight max queued messages
 func SubscribeMaxInFlight(n int) broker.SubscribeOption {
 	return broker.SetSubscribeOption(subscribeMaxInflightKey{}, n)
+}
+
+type publishPromiseKey struct{}
+
+// PublishPromise set the kafka promise func for Produce
+func PublishPromise(fn func(*kgo.Record, error)) broker.PublishOption {
+	return broker.SetPublishOption(publishPromiseKey{}, fn)
+}
+
+// ClientPublishKey set the kafka message key (client option)
+func ClientPublishPromise(fn func(*kgo.Record, error)) client.PublishOption {
+	return client.SetPublishOption(publishPromiseKey{}, fn)
 }

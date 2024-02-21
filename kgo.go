@@ -1,5 +1,5 @@
 // Package kgo provides a kafka broker using kgo
-package kgo // import "go.unistack.org/micro-broker-kgo/v3"
+package kgo
 
 import (
 	"context"
@@ -10,11 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.unistack.org/micro/v3/broker"
 	"go.unistack.org/micro/v3/metadata"
-	id "go.unistack.org/micro/v3/util/id"
+	"go.unistack.org/micro/v3/tracer"
 	mrand "go.unistack.org/micro/v3/util/rand"
 )
 
@@ -56,7 +57,6 @@ type Broker struct {
 	c         *kgo.Client
 	kopts     []kgo.Opt
 	connected bool
-	init      bool
 	sync.RWMutex
 	opts broker.Options
 	subs []*subscriber
@@ -73,9 +73,31 @@ func (k *Broker) Name() string {
 func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, error) {
 	var c *kgo.Client
 	var err error
+	var span tracer.Span
+	ctx, span = k.opts.Tracer.Start(ctx, "Connect")
+	defer span.Finish()
+
+	clientID := "kgo"
+	group := ""
+	if k.opts.Context != nil {
+		if id, ok := k.opts.Context.Value(clientIDKey{}).(string); ok {
+			clientID = id
+		}
+		if id, ok := k.opts.Context.Value(groupKey{}).(string); ok {
+			group = id
+		}
+	}
+
+	opts = append(opts,
+		kgo.WithHooks(&hookMeter{meter: k.opts.Meter}),
+		kgo.WithHooks(&hookTracer{group: group, clientID: clientID, tracer: k.opts.Tracer}),
+	)
 
 	select {
 	case <-ctx.Done():
+		if ctx.Err() != nil {
+			span.SetStatus(tracer.SpanStatusError, ctx.Err().Error())
+		}
 		return nil, ctx.Err()
 	default:
 		c, err = kgo.NewClient(opts...)
@@ -83,6 +105,7 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 			err = c.Ping(ctx) // check connectivity to cluster
 		}
 		if err != nil {
+			span.SetStatus(tracer.SpanStatusError, err.Error())
 			return nil, err
 		}
 	}
@@ -127,6 +150,9 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 	if ctx != nil {
 		nctx = ctx
 	}
+	var span tracer.Span
+	ctx, span = k.opts.Tracer.Start(ctx, "Disconnect")
+	defer span.Finish()
 
 	k.Lock()
 	defer k.Unlock()
@@ -196,12 +222,12 @@ func (k *Broker) Publish(ctx context.Context, topic string, msg *broker.Message,
 }
 
 func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
-	k.RLock()
-	ok := k.connected
-	k.RUnlock()
+	var span tracer.Span
+	ctx, span = k.opts.Tracer.Start(ctx, "Publish")
+	defer span.Finish()
 
-	if !ok {
-		k.Lock()
+	k.Lock()
+	if !k.connected {
 		c, err := k.connect(ctx, k.kopts...)
 		if err != nil {
 			k.Unlock()
@@ -209,24 +235,30 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		}
 		k.c = c
 		k.connected = true
-		k.Unlock()
 	}
+	k.Unlock()
 
 	options := broker.NewPublishOptions(opts...)
 	records := make([]*kgo.Record, 0, len(msgs))
 	var errs []string
 	var err error
 	var key []byte
+	var promise func(*kgo.Record, error)
 
 	if options.Context != nil {
 		if k, ok := options.Context.Value(publishKey{}).([]byte); ok && k != nil {
 			key = k
+		}
+		if p, ok := options.Context.Value(publishPromiseKey{}).(func(*kgo.Record, error)); ok && p != nil {
+			promise = p
 		}
 	}
 
 	for _, msg := range msgs {
 		rec := &kgo.Record{Context: ctx, Key: key}
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
+		msg.Header.Del(metadata.HeaderTopic)
+		// k.opts.Meter.Counter(broker.PublishMessageInflight, "endpoint", rec.Topic).Inc()
 		if options.BodyOnly || k.opts.Codec.String() == "noop" {
 			rec.Value = msg.Body
 			for k, v := range msg.Header {
@@ -241,10 +273,36 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		records = append(records, rec)
 	}
 
+	if promise != nil {
+		// ts := time.Now()
+		for _, rec := range records {
+			k.c.Produce(ctx, rec, func(r *kgo.Record, err error) {
+				// te := time.Since(ts)
+				//	k.opts.Meter.Counter(broker.PublishMessageInflight, "endpoint", rec.Topic).Dec()
+				//	k.opts.Meter.Summary(broker.PublishMessageLatencyMicroseconds, "endpoint", r.Topic).Update(te.Seconds())
+				//	k.opts.Meter.Histogram(broker.PublishMessageDurationSeconds, "endpoint", r.Topic).Update(te.Seconds())
+				if err != nil {
+					//	k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "failure").Inc()
+				} else {
+					// k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "success").Inc()
+				}
+				promise(r, err)
+			})
+		}
+		return nil
+	}
+	// ts := time.Now()
 	results := k.c.ProduceSync(ctx, records...)
+	// te := time.Since(ts)
 	for _, result := range results {
+		//	k.opts.Meter.Summary(broker.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic).Update(te.Seconds())
+		//	k.opts.Meter.Histogram(broker.PublishMessageDurationSeconds, "endpoint", result.Record.Topic).Update(te.Seconds())
+		///		k.opts.Meter.Counter(broker.PublishMessageInflight, "endpoint", result.Record.Topic).Dec()
 		if result.Err != nil {
+			//			k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", result.Record.Topic, "status", "failure").Inc()
 			errs = append(errs, result.Err.Error())
+		} else {
+			//			k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", result.Record.Topic, "status", "success").Inc()
 		}
 	}
 
@@ -263,11 +321,11 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 	options := broker.NewSubscribeOptions(opts...)
 
 	if options.Group == "" {
-		uid, err := id.New()
+		uid, err := uuid.NewRandom()
 		if err != nil {
 			return nil, err
 		}
-		options.Group = uid
+		options.Group = uid.String()
 	}
 
 	commitInterval := DefaultCommitInterval
@@ -335,7 +393,6 @@ func (k *Broker) String() string {
 }
 
 func NewBroker(opts ...broker.Option) *Broker {
-	rand.Seed(time.Now().Unix())
 	options := broker.NewOptions(opts...)
 
 	kaddrs := options.Addrs
@@ -349,8 +406,6 @@ func NewBroker(opts ...broker.Option) *Broker {
 		kgo.DisableIdempotentWrite(),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
 		kgo.WithLogger(&mlogger{l: options.Logger, ctx: options.Context}),
-		// kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, func() string { return time.Now().Format(time.StampMilli) })),
-		kgo.WithHooks(&metrics{meter: options.Meter}),
 		kgo.SeedBrokers(kaddrs...),
 		kgo.RetryBackoffFn(DefaultRetryBackoffFn),
 		kgo.BlockRebalanceOnPoll(),
