@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.unistack.org/micro/v4/logger"
@@ -30,11 +29,7 @@ func (l *mlogger) Log(lvl kgo.LogLevel, msg string, args ...interface{}) {
 		return
 	}
 	if len(args) > 0 {
-		fields := make(map[string]interface{}, int(len(args)/2))
-		for i := 0; i <= len(args)/2; i += 2 {
-			fields[fmt.Sprintf("%v", args[i])] = args[i+1]
-		}
-		l.l.Fields(fields).Log(l.ctx, mlvl, msg)
+		l.l.Log(l.ctx, mlvl, append([]interface{}{msg}, args...)...)
 	} else {
 		l.l.Log(l.ctx, mlvl, msg)
 	}
