@@ -54,6 +54,7 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 }()
 
 type Broker struct {
+	init      bool
 	c         *kgo.Client
 	kopts     []kgo.Opt
 	connected bool
@@ -182,6 +183,10 @@ func (k *Broker) Init(opts ...broker.Option) error {
 	k.Lock()
 	defer k.Unlock()
 
+	if len(opts) == 0 && k.init {
+		return nil
+	}
+
 	for _, o := range opts {
 		o(&k.opts)
 	}
@@ -204,6 +209,8 @@ func (k *Broker) Init(opts ...broker.Option) error {
 			k.kopts = append(k.kopts, v...)
 		}
 	}
+
+	k.init = true
 
 	return nil
 }
