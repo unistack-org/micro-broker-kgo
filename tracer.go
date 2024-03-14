@@ -72,7 +72,7 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(m.clientID))
 	}
 	opts := []tracer.SpanOption{
-		tracer.WithSpanLabels(otel2Micro(attrs...)),
+		tracer.WithSpanLabels(attrs...),
 		tracer.WithSpanKind(tracer.SpanKindProducer),
 	}
 	// Start the "publish" span.
@@ -126,7 +126,7 @@ func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 		attrs = append(attrs, semconv.MessagingKafkaConsumerGroupKey.String(m.group))
 	}
 	opts := []tracer.SpanOption{
-		tracer.WithSpanLabels(otel2Micro(attrs...)),
+		tracer.WithSpanLabels(attrs...),
 		tracer.WithSpanKind(tracer.SpanKindConsumer),
 	}
 
@@ -176,7 +176,7 @@ func (m *hookTracer) WithProcessSpan(r *kgo.Record) (context.Context, tracer.Spa
 		attrs = append(attrs, semconv.MessagingKafkaConsumerGroupKey.String(m.group))
 	}
 	opts := []tracer.SpanOption{
-		tracer.WithSpanLabels(otel2Micro(attrs...)),
+		tracer.WithSpanLabels(attrs...),
 		tracer.WithSpanKind(tracer.SpanKindConsumer),
 	}
 
@@ -197,12 +197,4 @@ func maybeKeyAttr(attrs []attribute.KeyValue, r *kgo.Record) []attribute.KeyValu
 	}
 	keykey = string(r.Key)
 	return append(attrs, semconv.MessagingKafkaMessageKeyKey.String(keykey))
-}
-
-func otel2Micro(attrs ...attribute.KeyValue) []interface{} {
-	ret := make([]interface{}, 0, len(attrs))
-	for _, a := range attrs {
-		ret = append(ret, a.Key, a.Value)
-	}
-	return ret
 }
