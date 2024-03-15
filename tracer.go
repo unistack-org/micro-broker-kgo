@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 	"go.unistack.org/micro/v3/tracer"
 )
@@ -61,7 +60,7 @@ func (m *hookTracer) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ i
 // hook.
 func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 	// Set up span options.
-	attrs := []attribute.KeyValue{
+	attrs := []interface{}{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingDestinationKindTopic,
 		semconv.MessagingDestinationName(r.Topic),
@@ -111,7 +110,7 @@ func (m *hookTracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 // processing.
 func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 	// Set up the span options.
-	attrs := []attribute.KeyValue{
+	attrs := []interface{}{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingSourceKindTopic,
 		semconv.MessagingSourceName(r.Topic),
@@ -160,7 +159,7 @@ func (m *hookTracer) OnFetchRecordUnbuffered(r *kgo.Record, _ bool) {
 // iteration of your processing for the record.
 func (m *hookTracer) WithProcessSpan(r *kgo.Record) (context.Context, tracer.Span) {
 	// Set up the span options.
-	attrs := []attribute.KeyValue{
+	attrs := []interface{}{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingSourceKindTopic,
 		semconv.MessagingSourceName(r.Topic),
@@ -187,7 +186,7 @@ func (m *hookTracer) WithProcessSpan(r *kgo.Record) (context.Context, tracer.Spa
 	return m.tracer.Start(r.Context, r.Topic+" process", opts...)
 }
 
-func maybeKeyAttr(attrs []attribute.KeyValue, r *kgo.Record) []attribute.KeyValue {
+func maybeKeyAttr(attrs []interface{}, r *kgo.Record) []interface{} {
 	if r.Key == nil {
 		return attrs
 	}
