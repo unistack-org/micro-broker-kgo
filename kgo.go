@@ -14,6 +14,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.unistack.org/micro/v3/broker"
+	"go.unistack.org/micro/v3/logger"
 	"go.unistack.org/micro/v3/metadata"
 	"go.unistack.org/micro/v3/tracer"
 	mrand "go.unistack.org/micro/v3/util/rand"
@@ -412,7 +413,7 @@ func NewBroker(opts ...broker.Option) *Broker {
 		kgo.DialTimeout(3 * time.Second),
 		kgo.DisableIdempotentWrite(),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
-		kgo.WithLogger(&mlogger{l: options.Logger, ctx: options.Context}),
+		kgo.WithLogger(&mlogger{l: options.Logger.Clone(logger.WithCallerSkipCount(options.Logger.Options().CallerSkipCount + 1)), ctx: options.Context}),
 		kgo.SeedBrokers(kaddrs...),
 		kgo.RetryBackoffFn(DefaultRetryBackoffFn),
 		kgo.BlockRebalanceOnPoll(),
