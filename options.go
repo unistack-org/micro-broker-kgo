@@ -9,8 +9,17 @@ import (
 	"go.unistack.org/micro/v3/client"
 )
 
-// DefaultCommitInterval specifies how fast send commit offsets to kafka
-var DefaultCommitInterval = 5 * time.Second
+var (
+
+	// DefaultCommitInterval specifies how fast send commit offsets to kafka
+	DefaultCommitInterval = 5 * time.Second
+
+	// DefaultStatsInterval specifies how fast check consumer lag
+	DefaultStatsInterval = 5 * time.Second
+
+	// DefaultSubscribeMaxInflight specifies how much messages keep inflight
+	DefaultSubscribeMaxInflight = 100
+)
 
 type subscribeContextKey struct{}
 
@@ -81,8 +90,6 @@ type commitIntervalKey struct{}
 func CommitInterval(td time.Duration) broker.Option {
 	return broker.SetOption(commitIntervalKey{}, td)
 }
-
-var DefaultSubscribeMaxInflight = 10
 
 type subscribeMaxInflightKey struct{}
 
