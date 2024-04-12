@@ -91,7 +91,7 @@ func (s *subscriber) poll(ctx context.Context) {
 				ticker.Stop()
 				return
 			case <-ticker.C:
-				dgls, err := ac.Lag(ctx, s.topic)
+				dgls, err := ac.Lag(ctx, s.opts.Group)
 				if err != nil || !dgls.Ok() {
 					continue
 				}
