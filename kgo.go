@@ -76,9 +76,8 @@ func (k *Broker) Name() string {
 func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, error) {
 	var c *kgo.Client
 	var err error
-	var span tracer.Span
-	ctx, span = k.opts.Tracer.Start(ctx, "Connect")
-	defer span.Finish()
+
+	sp, _ := tracer.SpanFromContext(ctx)
 
 	clientID := "kgo"
 	group := ""
@@ -99,7 +98,7 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 	select {
 	case <-ctx.Done():
 		if ctx.Err() != nil {
-			span.SetStatus(tracer.SpanStatusError, ctx.Err().Error())
+			sp.SetStatus(tracer.SpanStatusError, ctx.Err().Error())
 		}
 		return nil, ctx.Err()
 	default:
@@ -108,7 +107,7 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 			err = c.Ping(ctx) // check connectivity to cluster
 		}
 		if err != nil {
-			span.SetStatus(tracer.SpanStatusError, err.Error())
+			sp.SetStatus(tracer.SpanStatusError, err.Error())
 			return nil, err
 		}
 	}
