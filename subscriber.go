@@ -105,11 +105,13 @@ func (s *subscriber) poll(ctx context.Context) {
 					continue
 				}
 
+				s.Lock()
 				for tp := range s.consumers {
 					if v, ok := lmap[tp.p]; ok {
 						s.kopts.Meter.Counter(semconv.BrokerGroupLag, "topic", s.topic, "group", s.opts.Group, "partition", strconv.Itoa(int(tp.p)), "lag", strconv.Itoa(int(v.Lag)))
 					}
 				}
+				s.Unlock()
 
 			}
 		}
@@ -186,7 +188,9 @@ func (s *subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 				kopts:   s.kopts,
 				opts:    s.opts,
 			}
+			s.Lock()
 			s.consumers[tp{topic, partition}] = pc
+			s.Unlock()
 			go pc.consume()
 		}
 	}
