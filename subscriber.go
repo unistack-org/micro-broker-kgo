@@ -106,10 +106,8 @@ func (s *subscriber) poll(ctx context.Context) {
 				}
 
 				s.Lock()
-				for tp := range s.consumers {
-					if v, ok := lmap[tp.p]; ok {
-						s.kopts.Meter.Counter(semconv.BrokerGroupLag, "topic", s.topic, "group", s.opts.Group, "partition", strconv.Itoa(int(tp.p)), "lag", strconv.Itoa(int(v.Lag)))
-					}
+				for p, l := range lmap {
+					s.kopts.Meter.Counter(semconv.BrokerGroupLag, "topic", s.topic, "group", s.opts.Group, "partition", strconv.Itoa(int(p)), "lag", strconv.Itoa(int(l.Lag)))
 				}
 				s.Unlock()
 
