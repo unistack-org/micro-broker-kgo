@@ -98,7 +98,9 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 	select {
 	case <-ctx.Done():
 		if ctx.Err() != nil {
-			sp.SetStatus(tracer.SpanStatusError, ctx.Err().Error())
+			if sp != nil {
+				sp.SetStatus(tracer.SpanStatusError, ctx.Err().Error())
+			}
 		}
 		return nil, ctx.Err()
 	default:
@@ -107,7 +109,9 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 			err = c.Ping(ctx) // check connectivity to cluster
 		}
 		if err != nil {
-			sp.SetStatus(tracer.SpanStatusError, err.Error())
+			if sp != nil {
+				sp.SetStatus(tracer.SpanStatusError, err.Error())
+			}
 			return nil, err
 		}
 	}
