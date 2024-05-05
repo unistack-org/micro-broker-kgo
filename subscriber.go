@@ -12,6 +12,7 @@ import (
 	"go.unistack.org/micro/v3/logger"
 	"go.unistack.org/micro/v3/metadata"
 	"go.unistack.org/micro/v3/semconv"
+	"go.unistack.org/micro/v3/tracer"
 )
 
 type tp struct {
@@ -219,6 +220,9 @@ func (pc *consumer) consume() {
 				p.err = nil
 				p.ack = false
 				p.msg.Header = metadata.New(len(record.Headers))
+				p.ctx = record.Context
+				sp, _ := tracer.SpanFromContext(p.ctx)
+				defer sp.Finish()
 				for _, hdr := range record.Headers {
 					p.msg.Header.Set(hdr.Key, string(hdr.Value))
 				}
@@ -227,7 +231,11 @@ func (pc *consumer) consume() {
 				} else if pc.opts.BodyOnly {
 					p.msg.Body = record.Value
 				} else {
-					if err := pc.kopts.Codec.Unmarshal(record.Value, p.msg); err != nil {
+					sp.AddEvent("codec unmarshal start")
+					err := pc.kopts.Codec.Unmarshal(record.Value, p.msg)
+					sp.AddEvent("codec unmarshal stop")
+					if err != nil {
+						sp.SetStatus(tracer.SpanStatusError, err.Error())
 						pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 						p.err = err
 						p.msg.Body = record.Value
@@ -260,10 +268,13 @@ func (pc *consumer) consume() {
 						return
 					}
 				}
+				sp.AddEvent("handler start")
 				err := pc.handler(p)
+				sp.AddEvent("handler stop")
 				if err == nil {
 					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "success").Inc()
 				} else {
+					sp.SetStatus(tracer.SpanStatusError, err.Error())
 					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 				}
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()

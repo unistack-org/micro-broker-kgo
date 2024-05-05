@@ -1,17 +1,23 @@
 package kgo
 
 import (
+	"context"
 	"sync"
 
 	"go.unistack.org/micro/v3/broker"
 )
 
 type event struct {
+	ctx   context.Context
 	topic string
 	err   error
 	sync.RWMutex
 	msg *broker.Message
 	ack bool
+}
+
+func (p *event) Context() context.Context {
+	return p.ctx
 }
 
 func (p *event) Topic() string {

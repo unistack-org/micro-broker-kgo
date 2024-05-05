@@ -234,10 +234,6 @@ func (k *Broker) Publish(ctx context.Context, topic string, msg *broker.Message,
 }
 
 func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
-	var span tracer.Span
-	ctx, span = k.opts.Tracer.Start(ctx, "Publish")
-	defer span.Finish()
-
 	k.Lock()
 	if !k.connected {
 		c, err := k.connect(ctx, k.kopts...)
