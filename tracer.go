@@ -2,8 +2,6 @@ package kgo
 
 import (
 	"context"
-	"net"
-	"time"
 	"unicode/utf8"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -18,39 +16,11 @@ type hookTracer struct {
 }
 
 var (
-	_ kgo.HookBrokerConnect       = &hookTracer{}
-	_ kgo.HookBrokerDisconnect    = &hookTracer{}
-	_ kgo.HookBrokerRead          = &hookTracer{}
-	_ kgo.HookBrokerThrottle      = &hookTracer{}
-	_ kgo.HookBrokerWrite         = &hookTracer{}
-	_ kgo.HookFetchBatchRead      = &hookTracer{}
-	_ kgo.HookProduceBatchWritten = &hookTracer{}
-	_ kgo.HookGroupManageError    = &hookTracer{}
+	_ kgo.HookProduceRecordBuffered   = (*hookTracer)(nil)
+	_ kgo.HookProduceRecordUnbuffered = (*hookTracer)(nil)
+	_ kgo.HookFetchRecordBuffered     = (*hookTracer)(nil)
+	_ kgo.HookFetchRecordUnbuffered   = (*hookTracer)(nil)
 )
-
-func (m *hookTracer) OnGroupManageError(err error) {
-}
-
-func (m *hookTracer) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
-}
-
-func (m *hookTracer) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
-}
-
-func (m *hookTracer) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error) {
-}
-
-func (m *hookTracer) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, readWait, timeToRead time.Duration, err error) {
-}
-
-func (m *hookTracer) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
-}
-
-func (m *hookTracer) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, _ int32, kmetrics kgo.ProduceBatchMetrics) {
-}
-
-func (m *hookTracer) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int32, kmetrics kgo.FetchBatchMetrics) {
-}
 
 // OnProduceRecordBuffered starts a new span for the "publish" operation on a
 // buffered record.
@@ -88,17 +58,14 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 // It sets attributes with values unset when producing and records any error
 // that occurred during the publish operation.
 func (m *hookTracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
-	span, ok := tracer.SpanFromContext(r.Context)
-	if !ok {
-		return
-	}
-	defer span.Finish()
+	span, _ := tracer.SpanFromContext(r.Context)
 	span.AddLabels(
 		semconv.MessagingKafkaDestinationPartition(int(r.Partition)),
 	)
 	if err != nil {
 		span.SetStatus(tracer.SpanStatusError, err.Error())
 	}
+	span.Finish()
 }
 
 // OnFetchRecordBuffered starts a new span for the "receive" operation on a
@@ -143,9 +110,8 @@ func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 // OnFetchRecordUnbuffered continues and ends the "receive" span for an
 // unbuffered record.
 func (m *hookTracer) OnFetchRecordUnbuffered(r *kgo.Record, _ bool) {
-	if span, ok := tracer.SpanFromContext(r.Context); ok {
-		defer span.Finish()
-	}
+	span, _ := tracer.SpanFromContext(r.Context)
+	span.Finish()
 }
 
 // WithProcessSpan starts a new span for the "process" operation on a consumer

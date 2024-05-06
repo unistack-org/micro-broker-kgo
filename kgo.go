@@ -73,7 +73,7 @@ func (k *Broker) Name() string {
 	return k.opts.Name
 }
 
-func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, error) {
+func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *hookTracer, error) {
 	var c *kgo.Client
 	var err error
 
@@ -90,9 +90,10 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 		}
 	}
 
+	htracer := &hookTracer{group: group, clientID: clientID, tracer: k.opts.Tracer}
 	opts = append(opts,
 		kgo.WithHooks(&hookMeter{meter: k.opts.Meter}),
-		kgo.WithHooks(&hookTracer{group: group, clientID: clientID, tracer: k.opts.Tracer}),
+		kgo.WithHooks(htracer),
 	)
 
 	select {
@@ -102,7 +103,7 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 				sp.SetStatus(tracer.SpanStatusError, ctx.Err().Error())
 			}
 		}
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	default:
 		c, err = kgo.NewClient(opts...)
 		if err == nil {
@@ -112,10 +113,10 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, err
 			if sp != nil {
 				sp.SetStatus(tracer.SpanStatusError, err.Error())
 			}
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return c, nil
+	return c, htracer, nil
 }
 
 func (k *Broker) Connect(ctx context.Context) error {
@@ -131,7 +132,7 @@ func (k *Broker) Connect(ctx context.Context) error {
 		nctx = ctx
 	}
 
-	c, err := k.connect(nctx, k.kopts...)
+	c, _, err := k.connect(nctx, k.kopts...)
 	if err != nil {
 		return err
 	}
@@ -236,7 +237,7 @@ func (k *Broker) Publish(ctx context.Context, topic string, msg *broker.Message,
 func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
 	k.Lock()
 	if !k.connected {
-		c, err := k.connect(ctx, k.kopts...)
+		c, _, err := k.connect(ctx, k.kopts...)
 		if err != nil {
 			k.Unlock()
 			return err
@@ -370,7 +371,7 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		}
 	}
 
-	c, err := k.connect(ctx, kopts...)
+	c, htracer, err := k.connect(ctx, kopts...)
 	if err != nil {
 		return nil, err
 	}
@@ -388,6 +389,7 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 	}
 
 	sub.c = c
+	sub.htracer = htracer
 
 	go sub.poll(ctx)
 
