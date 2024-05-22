@@ -73,6 +73,10 @@ func (k *Broker) Name() string {
 	return k.opts.Name
 }
 
+func (k *Broker) Client() *kgo.Client {
+	return k.c
+}
+
 func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *hookTracer, error) {
 	var c *kgo.Client
 	var err error
@@ -317,6 +321,22 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 
 	if len(errs) > 0 {
 		return fmt.Errorf("publish error: %s", strings.Join(errs, "\n"))
+	}
+
+	return nil
+}
+
+func (k *Broker) TopicExists(ctx context.Context, topic string) error {
+	mdreq := kmsg.NewMetadataRequest()
+	mdreq.Topics = []kmsg.MetadataRequestTopic{
+		{Topic: &topic},
+	}
+
+	mdrsp, err := mdreq.RequestWith(ctx, k.c)
+	if err != nil {
+		return err
+	} else if mdrsp.Topics[0].ErrorCode != 0 {
+		return fmt.Errorf("topic %s not exists or permission error", topic)
 	}
 
 	return nil

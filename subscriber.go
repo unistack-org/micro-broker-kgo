@@ -46,6 +46,10 @@ type subscriber struct {
 	sync.RWMutex
 }
 
+func (s *subscriber) Client() *kgo.Client {
+	return s.c
+}
+
 func (s *subscriber) Options() broker.SubscribeOptions {
 	return s.opts
 }
