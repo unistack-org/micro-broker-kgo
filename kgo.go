@@ -62,7 +62,7 @@ type Broker struct {
 	connected bool
 	sync.RWMutex
 	opts broker.Options
-	subs []*subscriber
+	subs []*Subscriber
 }
 
 func (k *Broker) Address() string {
@@ -364,7 +364,7 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		}
 	}
 
-	sub := &subscriber{
+	sub := &Subscriber{
 		topic:     topic,
 		opts:      options,
 		handler:   handler,
