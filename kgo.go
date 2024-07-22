@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -275,7 +276,7 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		if options.BodyOnly || k.opts.Codec.String() == "noop" {
 			rec.Value = msg.Body
 			for k, v := range msg.Header {
-				rec.Headers = append(rec.Headers, kgo.RecordHeader{Key: k, Value: []byte(v)})
+				rec.Headers = append(rec.Headers, kgo.RecordHeader{Key: http.CanonicalHeaderKey(k), Value: []byte(v)})
 			}
 		} else {
 			rec.Value, err = k.opts.Codec.Marshal(msg)

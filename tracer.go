@@ -58,15 +58,15 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 		md.Set(h.Key, string(h.Value))
 	}
 
-	// Inject the span context into the record.
-	// t.propagators.Inject(ctx, NewRecordCarrier(r))
-	// Update the record context.
-
 	if !ok {
 		r.Context, _ = m.tracer.Start(metadata.NewOutgoingContext(r.Context, md), r.Topic+" publish", opts...)
 	} else {
 		r.Context, _ = m.tracer.Start(r.Context, r.Topic+" publish", opts...)
 	}
+
+	md, _ = metadata.FromOutgoingContext(r.Context)
+
+	setHeaders(r, md)
 }
 
 // OnProduceRecordUnbuffered continues and ends the "publish" span for an
@@ -75,14 +75,15 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 // It sets attributes with values unset when producing and records any error
 // that occurred during the publish operation.
 func (m *hookTracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
-	span, _ := tracer.SpanFromContext(r.Context)
-	span.AddLabels(
-		semconv.MessagingKafkaDestinationPartition(int(r.Partition)),
-	)
-	if err != nil {
-		span.SetStatus(tracer.SpanStatusError, err.Error())
+	if span, ok := tracer.SpanFromContext(r.Context); ok {
+		span.AddLabels(
+			semconv.MessagingKafkaDestinationPartition(int(r.Partition)),
+		)
+		if err != nil {
+			span.SetStatus(tracer.SpanStatusError, err.Error())
+		}
+		span.Finish()
 	}
-	span.Finish()
 }
 
 // OnFetchRecordBuffered starts a new span for the "receive" operation on a
@@ -124,16 +125,15 @@ func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 		md.Set(h.Key, string(h.Value))
 	}
 
-	// Extract the span context from the record.
-	// ctx := t.propagators.Extract(r.Context, NewRecordCarrier(r))
-	// Start the "receive" span.
 	if !ok {
 		r.Context, _ = m.tracer.Start(metadata.NewIncomingContext(r.Context, md), r.Topic+" receive", opts...)
 	} else {
 		r.Context, _ = m.tracer.Start(r.Context, r.Topic+" receive", opts...)
 	}
 
-	// Update the record context.
+	md, _ = metadata.FromIncomingContext(r.Context)
+
+	setHeaders(r, md)
 }
 
 // OnFetchRecordUnbuffered continues and ends the "receive" span for an

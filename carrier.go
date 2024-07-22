@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.unistack.org/micro/v3/metadata"
 )
 
 // RecordCarrier injects and extracts traces from a kgo.Record.
@@ -50,4 +51,26 @@ func (c RecordCarrier) Keys() []string {
 		out[i] = h.Key
 	}
 	return out
+}
+
+func setHeaders(r *kgo.Record, md metadata.Metadata) {
+	seen := make(map[string]struct{})
+loop:
+	for k, v := range md {
+		for i := 0; i < len(r.Headers); i++ {
+			if r.Headers[i].Key == k {
+				// Key exist, update the value.
+				r.Headers[i].Value = []byte(v)
+				continue loop
+			} else if _, ok := seen[k]; ok {
+				continue loop
+			}
+			// Key does not exist, append new header.
+			r.Headers = append(r.Headers, kgo.RecordHeader{
+				Key:   k,
+				Value: []byte(v),
+			})
+			seen[k] = struct{}{}
+		}
+	}
 }
