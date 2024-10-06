@@ -443,6 +443,7 @@ func NewBroker(opts ...broker.Option) *Broker {
 		kgo.BlockRebalanceOnPoll(),
 		kgo.Balancers(kgo.CooperativeStickyBalancer()),
 		kgo.FetchIsolationLevel(kgo.ReadUncommitted()),
+		kgo.UnknownTopicRetries(0),
 	}
 
 	if options.Context != nil {
