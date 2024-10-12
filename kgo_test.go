@@ -50,7 +50,7 @@ func TestPubSub(t *testing.T) {
 		t.Skip()
 	}
 
-	if err := logger.DefaultLogger.Init(logger.WithLevel(loglevel), logger.WithCallerSkipCount(3)); err != nil {
+	if err := logger.DefaultLogger.Init(logger.WithLevel(loglevel)); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -136,7 +137,7 @@ func (s *Subscriber) poll(ctx context.Context) {
 				return
 			}
 			fetches.EachError(func(t string, p int32, err error) {
-				s.kopts.Logger.Fatalf(ctx, "[kgo] fetch topic %s partition %d err: %v", t, p, err)
+				s.kopts.Logger.Fatal(ctx, fmt.Sprintf("[kgo] fetch topic %s partition %d error", t, p), err)
 			})
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
@@ -158,7 +159,9 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 			pc := s.consumers[tp]
 			delete(s.consumers, tp)
 			close(pc.quit)
-			s.kopts.Logger.Debugf(ctx, "[kgo] waiting for work to finish topic %s partition %d", topic, partition)
+			if s.kopts.Logger.V(logger.DebugLevel) {
+				s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] waiting for work to finish topic %s partition %d", topic, partition))
+			}
 			wg.Add(1)
 			go func() { <-pc.done; wg.Done() }()
 		}
@@ -166,15 +169,19 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 }
 
 func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]int32) {
-	s.kopts.Logger.Debugf(ctx, "[kgo] lost %#+v", lost)
+	if s.kopts.Logger.V(logger.DebugLevel) {
+		s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] lost %#+v", lost))
+	}
 	s.killConsumers(ctx, lost)
 }
 
 func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[string][]int32) {
-	s.kopts.Logger.Debugf(ctx, "[kgo] revoked %#+v", revoked)
+	if s.kopts.Logger.V(logger.DebugLevel) {
+		s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] revoked %#+v", revoked))
+	}
 	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
-		s.kopts.Logger.Errorf(ctx, "[kgo] revoked CommitMarkedOffsets err: %v", err)
+		s.kopts.Logger.Error(ctx, "[kgo] revoked CommitMarkedOffsets error", err)
 	}
 }
 
@@ -203,8 +210,10 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 
 func (pc *consumer) consume() {
 	defer close(pc.done)
-	pc.kopts.Logger.Debugf(pc.kopts.Context, "starting, topic %s partition %d", pc.topic, pc.partition)
-	defer pc.kopts.Logger.Debugf(pc.kopts.Context, "killing, topic %s partition %d", pc.topic, pc.partition)
+	if pc.kopts.Logger.V(logger.DebugLevel) {
+		pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("starting, topic %s partition %d", pc.topic, pc.partition))
+		defer pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("killing, topic %s partition %d", pc.topic, pc.partition))
+	}
 
 	eh := pc.kopts.ErrorHandler
 	if pc.opts.ErrorHandler != nil {
@@ -251,7 +260,7 @@ func (pc *consumer) consume() {
 								pc.c.MarkCommitRecords(record)
 							} else {
 								eventPool.Put(p)
-								pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
+								pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
 								return
 							}
 							eventPool.Put(p)
@@ -260,16 +269,14 @@ func (pc *consumer) consume() {
 							pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 							continue
 						} else {
-							if pc.kopts.Logger.V(logger.ErrorLevel) {
-								pc.kopts.Logger.Errorf(pc.kopts.Context, "[kgo]: failed to unmarshal: %v", err)
-							}
+							pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: unmarshal error", err)
 						}
 						te := time.Since(ts)
 						pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
 						pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 						pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 						eventPool.Put(p)
-						pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
+						pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
 						sp.Finish()
 						return
 					}
@@ -294,7 +301,7 @@ func (pc *consumer) consume() {
 						sp.AddEvent("error handler stop")
 					} else {
 						if pc.kopts.Logger.V(logger.ErrorLevel) {
-							pc.kopts.Logger.Errorf(pc.kopts.Context, "[kgo]: subscriber error: %v", err)
+							pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: subscriber error", err)
 						}
 					}
 				}
@@ -306,7 +313,7 @@ func (pc *consumer) consume() {
 					pc.c.MarkCommitRecords(record)
 				} else {
 					eventPool.Put(p)
-					pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
+					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
 					sp.SetStatus(tracer.SpanStatusError, "ErrLostMessage")
 					sp.Finish()
 					return
