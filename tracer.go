@@ -52,10 +52,12 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 		r.Context = context.Background()
 	}
 
-	md, ok := metadata.FromOutgoingContext(r.Context)
+	omd, ok := metadata.FromOutgoingContext(r.Context)
 	if !ok {
-		md = metadata.New(len(r.Headers))
+		omd = metadata.New(len(r.Headers))
 	}
+
+	md := metadata.Copy(omd)
 	for _, h := range r.Headers {
 		md.Set(h.Key, string(h.Value))
 	}
@@ -66,9 +68,7 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 		r.Context, _ = m.tracer.Start(r.Context, "sdk.broker", opts...)
 	}
 
-	md, _ = metadata.FromOutgoingContext(r.Context)
-
-	setHeaders(r, md)
+	setHeaders(r, omd)
 }
 
 // OnProduceRecordUnbuffered continues and ends the "publish" span for an
@@ -119,10 +119,12 @@ func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 	if r.Context == nil {
 		r.Context = context.Background()
 	}
-	md, ok := metadata.FromIncomingContext(r.Context)
+	omd, ok := metadata.FromIncomingContext(r.Context)
 	if !ok {
-		md = metadata.New(len(r.Headers))
+		omd = metadata.New(len(r.Headers))
 	}
+
+	md := metadata.Copy(omd)
 	for _, h := range r.Headers {
 		md.Set(h.Key, string(h.Value))
 	}
@@ -133,9 +135,7 @@ func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 		r.Context, _ = m.tracer.Start(r.Context, "sdk.broker", opts...)
 	}
 
-	md, _ = metadata.FromIncomingContext(r.Context)
-
-	setHeaders(r, md)
+	setHeaders(r, omd)
 }
 
 // OnFetchRecordUnbuffered continues and ends the "receive" span for an
