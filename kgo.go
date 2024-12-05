@@ -460,7 +460,8 @@ func NewBroker(opts ...broker.Option) *Broker {
 	}
 
 	return &Broker{
-		opts:  options,
-		kopts: kopts,
+		connected: &atomic.Uint32{},
+		opts:      options,
+		kopts:     kopts,
 	}
 }
