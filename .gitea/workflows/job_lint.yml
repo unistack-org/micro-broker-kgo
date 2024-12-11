@@ -12,15 +12,18 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - name: checkout
-      uses: actions/checkout@v3
-    - name: setup-go
+    - name: checkout code
+      uses: actions/checkout@v4
+      with:
+        filter: 'blob:none'
+    - name: setup go
       uses: actions/setup-go@v5
       with:
-        go-version: 'stable'
-    - name: deps
-      run: go get -v -d ./...
-    - name: lint
+        cache-dependency-path: "**/*.sum"
+        go-version: 'stable' 
+    - name: setup deps
+      run: go get -v ./...
+    - name: run lint
       uses: https://github.com/golangci/golangci-lint-action@v6
       with:
         version: 'latest'
