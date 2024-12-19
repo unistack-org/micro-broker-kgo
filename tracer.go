@@ -11,9 +11,9 @@ import (
 )
 
 type hookTracer struct {
+	tracer   tracer.Tracer
 	clientID string
 	group    string
-	tracer   tracer.Tracer
 }
 
 var messagingSystem = semconv.MessagingSystemKey.String("kafka")
