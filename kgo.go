@@ -57,16 +57,16 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 }()
 
 type Broker struct {
-	c *kgo.Client
+	c         *kgo.Client
 	connected *atomic.Uint32
 
 	kopts []kgo.Opt
-	subs  []*subscriber
+	subs  []*Subscriber
 
 	opts broker.Options
 
 	sync.RWMutex
-	init      bool
+	init bool
 }
 
 func (r *Broker) Live() bool {
@@ -305,7 +305,7 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 				k.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
 				k.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
 				// if err != nil {
-					k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "failure").Inc()
+				k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "failure").Inc()
 				// } else {
 				k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "success").Inc()
 				// }
@@ -325,7 +325,7 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 			k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "failure").Inc()
 			errs = append(errs, result.Err.Error())
 		} //  else {
-			k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "success").Inc()
+		k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "success").Inc()
 		// }
 	}
 

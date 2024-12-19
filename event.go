@@ -10,10 +10,9 @@ import (
 type event struct {
 	msg *broker.Message
 	err error
+	ctx context.Context
 
 	topic string
-
-	ctx   context.Context
 
 	sync.RWMutex
 	ack bool
