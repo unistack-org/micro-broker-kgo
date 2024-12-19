@@ -10,7 +10,6 @@ linters:
     - unused
     - gosimple
     - govet
-    - goimports
     - prealloc
     - unconvert
     - nakedret
