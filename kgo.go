@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"sync"
@@ -29,7 +29,6 @@ var ErrLostMessage = errors.New("message not marked for offsets commit and will 
 
 var DefaultRetryBackoffFn = func() func(int) time.Duration {
 	var rngMu sync.Mutex
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return func(fails int) time.Duration {
 		const (
 			min = 100 * time.Millisecond
@@ -45,7 +44,7 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 		backoff := min * time.Duration(1<<(fails-1))
 
 		rngMu.Lock()
-		jitter := 0.8 + 0.4*rng.Float64()
+		jitter := 0.8 + 0.4*rand.Float64()
 		rngMu.Unlock()
 
 		backoff = time.Duration(float64(backoff) * jitter)
@@ -58,13 +57,16 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 }()
 
 type Broker struct {
-	init      bool
 	c         *kgo.Client
-	kopts     []kgo.Opt
 	connected *atomic.Uint32
-	sync.RWMutex
+
+	kopts []kgo.Opt
+	subs  []*Subscriber
+
 	opts broker.Options
-	subs []*Subscriber
+
+	sync.RWMutex
+	init bool
 }
 
 func (r *Broker) Live() bool {
@@ -350,7 +352,7 @@ func (k *Broker) TopicExists(ctx context.Context, topic string) error {
 	return nil
 }
 
-func (k *Broker) BatchSubscribe(ctx context.Context, topic string, handler broker.BatchHandler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
+func (k *Broker) BatchSubscribe(_ context.Context, _ string, _ broker.BatchHandler, _ ...broker.SubscribeOption) (broker.Subscriber, error) {
 	return nil, nil
 }
 

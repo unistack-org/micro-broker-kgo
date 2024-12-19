@@ -22,29 +22,35 @@ type tp struct {
 }
 
 type consumer struct {
-	c         *kgo.Client
-	topic     string
-	partition int32
+	topic string
+
+	c *kgo.Client
 	htracer   *hookTracer
-	opts      broker.SubscribeOptions
-	kopts     broker.Options
-	handler   broker.Handler
-	quit      chan struct{}
-	done      chan struct{}
-	recs      chan kgo.FetchTopicPartition
+
+	handler broker.Handler
+	quit    chan struct{}
+	done    chan struct{}
+	recs    chan kgo.FetchTopicPartition
+
+	kopts broker.Options
+	opts  broker.SubscribeOptions
+
+	partition int32
 }
 
 type Subscriber struct {
-	c         *kgo.Client
-	topic     string
-	htracer   *hookTracer
-	opts      broker.SubscribeOptions
-	kopts     broker.Options
-	handler   broker.Handler
-	closed    bool
-	done      chan struct{}
 	consumers map[tp]*consumer
+	c         *kgo.Client
+	htracer   *hookTracer
+	topic     string
+
+	handler broker.Handler
+	done    chan struct{}
+	kopts   broker.Options
+	opts    broker.SubscribeOptions
+
 	sync.RWMutex
+	closed bool
 }
 
 func (s *Subscriber) Client() *kgo.Client {
@@ -138,8 +144,8 @@ func (s *Subscriber) poll(ctx context.Context) {
 			})
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-				tp := tp{p.Topic, p.Partition}
-				s.consumers[tp].recs <- p
+				nTp := tp{p.Topic, p.Partition}
+				s.consumers[nTp].recs <- p
 			})
 			s.c.AllowRebalance()
 		}
@@ -152,9 +158,9 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 
 	for topic, partitions := range lost {
 		for _, partition := range partitions {
-			tp := tp{topic, partition}
-			pc := s.consumers[tp]
-			delete(s.consumers, tp)
+			nTp := tp{topic, partition}
+			pc := s.consumers[nTp]
+			delete(s.consumers, nTp)
 			close(pc.quit)
 			if s.kopts.Logger.V(logger.DebugLevel) {
 				s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] waiting for work to finish topic %s partition %d", topic, partition))

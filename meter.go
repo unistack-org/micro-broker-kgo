@@ -61,7 +61,7 @@ const (
 	labelTopic   = "topic"
 )
 
-func (m *hookMeter) OnGroupManageError(err error) {
+func (m *hookMeter) OnGroupManageError(_ error) {
 	m.meter.Counter(metricBrokerGroupErrors).Inc()
 }
 
