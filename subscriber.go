@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -16,27 +17,33 @@ type tp struct {
 }
 
 type consumer struct {
-	c         *kgo.Client
-	topic     string
+	topic string
+
+	c *kgo.Client
+
+	handler broker.Handler
+	quit    chan struct{}
+	done    chan struct{}
+	recs    chan kgo.FetchTopicPartition
+
+	kopts broker.Options
+	opts  broker.SubscribeOptions
+
 	partition int32
-	opts      broker.SubscribeOptions
-	kopts     broker.Options
-	handler   broker.Handler
-	quit      chan struct{}
-	done      chan struct{}
-	recs      chan kgo.FetchTopicPartition
 }
 
 type subscriber struct {
+	consumers map[tp]*consumer
 	c         *kgo.Client
 	topic     string
-	opts      broker.SubscribeOptions
-	kopts     broker.Options
-	handler   broker.Handler
-	closed    bool
-	done      chan struct{}
-	consumers map[tp]*consumer
+
+	handler broker.Handler
+	done    chan struct{}
+	kopts   broker.Options
+	opts    broker.SubscribeOptions
+
 	sync.RWMutex
+	closed bool
 }
 
 func (s *subscriber) Options() broker.SubscribeOptions {
@@ -51,21 +58,21 @@ func (s *subscriber) Unsubscribe(ctx context.Context) error {
 	if s.closed {
 		return nil
 	}
-	select {
+	// select {
 	// case <-ctx.Done():
 	//	return ctx.Err()
-	default:
-		s.c.PauseFetchTopics(s.topic)
-		s.c.CloseAllowingRebalance()
-		kc := make(map[string][]int32)
-		for ctp := range s.consumers {
-			kc[ctp.t] = append(kc[ctp.t], ctp.p)
-		}
-		s.killConsumers(ctx, kc)
-		close(s.done)
-		s.closed = true
-		s.c.ResumeFetchTopics(s.topic)
+	// default:
+	s.c.PauseFetchTopics(s.topic)
+	s.c.CloseAllowingRebalance()
+	kc := make(map[string][]int32)
+	for ctp := range s.consumers {
+		kc[ctp.t] = append(kc[ctp.t], ctp.p)
 	}
+	s.killConsumers(ctx, kc)
+	close(s.done)
+	s.closed = true
+	s.c.ResumeFetchTopics(s.topic)
+	// }
 	return nil
 }
 
@@ -90,12 +97,12 @@ func (s *subscriber) poll(ctx context.Context) {
 				return
 			}
 			fetches.EachError(func(t string, p int32, err error) {
-				s.kopts.Logger.Fatalf(ctx, "[kgo] fetch topic %s partition %d err: %v", t, p, err)
+				s.kopts.Logger.Fatal(ctx, fmt.Sprintf("[kgo] fetch topic %s partition %d", t, p), err)
 			})
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-				tp := tp{p.Topic, p.Partition}
-				s.consumers[tp].recs <- p
+				nTp := tp{p.Topic, p.Partition}
+				s.consumers[nTp].recs <- p
 			})
 			s.c.AllowRebalance()
 		}
@@ -108,11 +115,11 @@ func (s *subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 
 	for topic, partitions := range lost {
 		for _, partition := range partitions {
-			tp := tp{topic, partition}
-			pc := s.consumers[tp]
-			delete(s.consumers, tp)
+			nTp := tp{topic, partition}
+			pc := s.consumers[nTp]
+			delete(s.consumers, nTp)
 			close(pc.quit)
-			s.kopts.Logger.Debugf(ctx, "[kgo] waiting for work to finish topic %s partition %d", topic, partition)
+			s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] waiting for work to finish topic %s partition %d", topic, partition))
 			wg.Add(1)
 			go func() { <-pc.done; wg.Done() }()
 		}
@@ -120,15 +127,15 @@ func (s *subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 }
 
 func (s *subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]int32) {
-	s.kopts.Logger.Debugf(ctx, "[kgo] lost %#+v", lost)
+	s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] lost %#+v", lost))
 	s.killConsumers(ctx, lost)
 }
 
 func (s *subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[string][]int32) {
-	s.kopts.Logger.Debugf(ctx, "[kgo] revoked %#+v", revoked)
+	s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] revoked %#+v", revoked))
 	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
-		s.kopts.Logger.Errorf(ctx, "[kgo] revoked CommitMarkedOffsets err: %v", err)
+		s.kopts.Logger.Error(ctx, "[kgo] revoked CommitMarkedOffsets", err)
 	}
 }
 
@@ -155,8 +162,8 @@ func (s *subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 
 func (pc *consumer) consume() {
 	defer close(pc.done)
-	pc.kopts.Logger.Debugf(pc.kopts.Context, "starting, topic %s partition %d", pc.topic, pc.partition)
-	defer pc.kopts.Logger.Debugf(pc.kopts.Context, "killing, topic %s partition %d", pc.topic, pc.partition)
+	pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("starting, topic %s partition %d", pc.topic, pc.partition))
+	defer pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("killing, topic %s partition %d", pc.topic, pc.partition))
 
 	eh := pc.kopts.ErrorHandler
 	if pc.opts.ErrorHandler != nil {
@@ -197,7 +204,7 @@ func (pc *consumer) consume() {
 								pc.c.MarkCommitRecords(record)
 							} else {
 								eventPool.Put(p)
-								pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
+								pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
 								return
 							}
 							eventPool.Put(p)
@@ -207,7 +214,7 @@ func (pc *consumer) consume() {
 							continue
 						} else {
 							if pc.kopts.Logger.V(logger.ErrorLevel) {
-								pc.kopts.Logger.Errorf(pc.kopts.Context, "[kgo]: failed to unmarshal: %v", err)
+								pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: failed to unmarshal", err)
 							}
 						}
 						//		te := time.Since(ts)
@@ -215,16 +222,16 @@ func (pc *consumer) consume() {
 						//		pc.kopts.Meter.Summary(broker.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic).Update(te.Seconds())
 						//			pc.kopts.Meter.Histogram(broker.SubscribeMessageDurationSeconds, "endpoint", record.Topic).Update(te.Seconds())
 						eventPool.Put(p)
-						pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
+						pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
 						return
 					}
 				}
 				err := pc.handler(p)
-				if err == nil {
-					//	pc.kopts.Meter.Counter(broker.SubscribeMessageTotal, "endpoint", record.Topic, "status", "success").Inc()
-				} else {
-					//	pc.kopts.Meter.Counter(broker.SubscribeMessageTotal, "endpoint", record.Topic, "status", "failure").Inc()
-				}
+				// if err == nil {
+				//		pc.kopts.Meter.Counter(broker.SubscribeMessageTotal, "endpoint", record.Topic, "status", "success").Inc()
+				// } else {
+				//		pc.kopts.Meter.Counter(broker.SubscribeMessageTotal, "endpoint", record.Topic, "status", "failure").Inc()
+				// }
 				// pc.kopts.Meter.Counter(broker.SubscribeMessageInflight, "endpoint", record.Topic).Dec()
 				if err == nil && pc.opts.AutoAck {
 					p.ack = true
@@ -234,7 +241,7 @@ func (pc *consumer) consume() {
 						_ = eh(p)
 					} else {
 						if pc.kopts.Logger.V(logger.ErrorLevel) {
-							pc.kopts.Logger.Errorf(pc.kopts.Context, "[kgo]: subscriber error: %v", err)
+							pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: subscriber error", err)
 						}
 					}
 				}
@@ -246,7 +253,7 @@ func (pc *consumer) consume() {
 					pc.c.MarkCommitRecords(record)
 				} else {
 					eventPool.Put(p)
-					pc.kopts.Logger.Fatalf(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
+					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
 					return
 				}
 			}

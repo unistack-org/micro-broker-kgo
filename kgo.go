@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +25,6 @@ var ErrLostMessage = errors.New("message not marked for offsets commit and will 
 
 var DefaultRetryBackoffFn = func() func(int) time.Duration {
 	var rngMu sync.Mutex
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return func(fails int) time.Duration {
 		const (
 			min = 100 * time.Millisecond
@@ -41,7 +40,7 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 		backoff := min * time.Duration(1<<(fails-1))
 
 		rngMu.Lock()
-		jitter := 0.8 + 0.4*rng.Float64()
+		jitter := 0.8 + 0.4*rand.Float64()
 		rngMu.Unlock()
 
 		backoff = time.Duration(float64(backoff) * jitter)
@@ -54,13 +53,31 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 }()
 
 type Broker struct {
-	init      bool
-	c         *kgo.Client
-	kopts     []kgo.Opt
-	connected bool
-	sync.RWMutex
+	c *kgo.Client
+
+	kopts []kgo.Opt
+	subs  []*subscriber
+
 	opts broker.Options
-	subs []*subscriber
+
+	sync.RWMutex
+	connected bool
+	init      bool
+}
+
+func (k *Broker) Live() bool {
+	//TODO implement me
+	return true
+}
+
+func (k *Broker) Ready() bool {
+	//TODO implement me
+	return true
+}
+
+func (k *Broker) Health() bool {
+	//TODO implement me
+	return true
 }
 
 func (k *Broker) Address() string {
@@ -288,11 +305,11 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 				//	k.opts.Meter.Counter(broker.PublishMessageInflight, "endpoint", rec.Topic).Dec()
 				//	k.opts.Meter.Summary(broker.PublishMessageLatencyMicroseconds, "endpoint", r.Topic).Update(te.Seconds())
 				//	k.opts.Meter.Histogram(broker.PublishMessageDurationSeconds, "endpoint", r.Topic).Update(te.Seconds())
-				if err != nil {
-					//	k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "failure").Inc()
-				} else {
-					// k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "success").Inc()
-				}
+				// if err != nil {
+				//	k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "failure").Inc()
+				// } else {
+				// k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", r.Topic, "status", "success").Inc()
+				// }
 				promise(r, err)
 			})
 		}
@@ -308,9 +325,9 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		if result.Err != nil {
 			//			k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", result.Record.Topic, "status", "failure").Inc()
 			errs = append(errs, result.Err.Error())
-		} else {
-			//			k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", result.Record.Topic, "status", "success").Inc()
-		}
+		} //  else {
+		//			k.opts.Meter.Counter(broker.PublishMessageTotal, "endpoint", result.Record.Topic, "status", "success").Inc()
+		// }
 	}
 
 	if len(errs) > 0 {
@@ -320,7 +337,7 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 	return nil
 }
 
-func (k *Broker) BatchSubscribe(ctx context.Context, topic string, handler broker.BatchHandler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
+func (k *Broker) BatchSubscribe(_ context.Context, _ string, _ broker.BatchHandler, _ ...broker.SubscribeOption) (broker.Subscriber, error) {
 	return nil, nil
 }
 

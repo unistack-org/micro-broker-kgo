@@ -28,11 +28,8 @@ func (l *mlogger) Log(lvl kgo.LogLevel, msg string, args ...interface{}) {
 	default:
 		return
 	}
-	if len(args) > 0 {
-		l.l.Log(l.ctx, mlvl, append([]interface{}{msg}, args...)...)
-	} else {
-		l.l.Log(l.ctx, mlvl, msg)
-	}
+
+	l.l.Log(l.ctx, mlvl, msg, args...)
 }
 
 func (l *mlogger) Level() kgo.LogLevel {
