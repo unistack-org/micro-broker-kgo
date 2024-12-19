@@ -63,21 +63,18 @@ func (s *Subscriber) Unsubscribe(ctx context.Context) error {
 	if s.closed {
 		return nil
 	}
-	select {
-	// case <-ctx.Done():
-	//	return ctx.Err()
-	default:
-		s.c.PauseFetchTopics(s.topic)
-		s.c.CloseAllowingRebalance()
-		kc := make(map[string][]int32)
-		for ctp := range s.consumers {
-			kc[ctp.t] = append(kc[ctp.t], ctp.p)
-		}
-		s.killConsumers(ctx, kc)
-		close(s.done)
-		s.closed = true
-		s.c.ResumeFetchTopics(s.topic)
+
+	s.c.PauseFetchTopics(s.topic)
+	s.c.CloseAllowingRebalance()
+	kc := make(map[string][]int32)
+	for ctp := range s.consumers {
+		kc[ctp.t] = append(kc[ctp.t], ctp.p)
 	}
+	s.killConsumers(ctx, kc)
+	close(s.done)
+	s.closed = true
+	s.c.ResumeFetchTopics(s.topic)
+
 	return nil
 }
 
