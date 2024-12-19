@@ -8,11 +8,14 @@ import (
 )
 
 type event struct {
-	ctx   context.Context
-	topic string
-	err   error
-	sync.RWMutex
 	msg *broker.Message
+	err error
+
+	topic string
+
+	ctx   context.Context
+
+	sync.RWMutex
 	ack bool
 }
 
