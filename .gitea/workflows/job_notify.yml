@@ -6,14 +6,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: send
-        uses: https://github.com/appleboy/telegram-action@master #appleboy/telegram-action@master
+        uses: cbrgm/telegram-github-action@v1
         with:
           to: ${{ secrets.TELEGRAM_TO }}
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
-            ${{ github.actor }} created commit:
-            Commit message: ${{ github.event.commits[0].message }}
-            
+            New commit by ${{ github.actor }}:
+            Commit: ${{ github.event.commits[0].message }}
             Repository: ${{ github.repository }}
-            
-            See changes: https://git.unistack.org/${{ github.repository }}/commit/${{github.sha}}
+            Changes: https://git.unistack.org/${{ github.repository }}/commit/${{github.sha}}
