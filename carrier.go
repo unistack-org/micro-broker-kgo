@@ -1,6 +1,10 @@
 package kgo
 
 import (
+	"net/http"
+	"slices"
+	"strings"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.unistack.org/micro/v3/metadata"
 )
@@ -53,24 +57,37 @@ func (c RecordCarrier) Keys() []string {
 	return out
 }
 
-func setHeaders(r *kgo.Record, md metadata.Metadata) {
+func setHeaders(r *kgo.Record, md metadata.Metadata, exclude ...string) {
 	seen := make(map[string]struct{})
+
 loop:
 	for k, v := range md {
+		k = http.CanonicalHeaderKey(k)
+
+		if _, ok := seen[k]; ok {
+			continue loop
+		}
+
+		if slices.ContainsFunc(exclude, func(s string) bool {
+			return strings.EqualFold(s, k)
+		}) {
+			continue loop
+		}
+
 		for i := 0; i < len(r.Headers); i++ {
-			if r.Headers[i].Key == k {
+			if strings.EqualFold(r.Headers[i].Key, k) {
 				// Key exist, update the value.
 				r.Headers[i].Value = []byte(v)
 				continue loop
-			} else if _, ok := seen[k]; ok {
-				continue loop
 			}
-			// Key does not exist, append new header.
-			r.Headers = append(r.Headers, kgo.RecordHeader{
-				Key:   k,
-				Value: []byte(v),
-			})
-			seen[k] = struct{}{}
 		}
+
+		// Key does not exist, append new header.
+		r.Headers = append(r.Headers, kgo.RecordHeader{
+			Key:   k,
+			Value: []byte(v),
+		})
+
+		seen[k] = struct{}{}
 	}
 }

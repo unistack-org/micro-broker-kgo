@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -279,14 +278,14 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 
 	for _, msg := range msgs {
 		rec := &kgo.Record{Context: ctx, Key: key}
+
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
 		msg.Header.Del(metadata.HeaderTopic)
+
 		k.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", rec.Topic, "topic", rec.Topic).Inc()
 		if options.BodyOnly || k.opts.Codec.String() == "noop" {
 			rec.Value = msg.Body
-			for k, v := range msg.Header {
-				rec.Headers = append(rec.Headers, kgo.RecordHeader{Key: http.CanonicalHeaderKey(k), Value: []byte(v)})
-			}
+			setHeaders(rec, msg.Header)
 		} else {
 			rec.Value, err = k.opts.Codec.Marshal(msg)
 			if err != nil {

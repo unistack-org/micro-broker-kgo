@@ -68,7 +68,7 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 		r.Context, _ = m.tracer.Start(r.Context, "sdk.broker", opts...)
 	}
 
-	setHeaders(r, omd)
+	setHeaders(r, omd, metadata.HeaderContentType)
 }
 
 // OnProduceRecordUnbuffered continues and ends the "publish" span for an
@@ -135,7 +135,7 @@ func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 		r.Context, _ = m.tracer.Start(r.Context, "sdk.broker", opts...)
 	}
 
-	setHeaders(r, omd)
+	setHeaders(r, omd, metadata.HeaderContentType)
 }
 
 // OnFetchRecordUnbuffered continues and ends the "receive" span for an
