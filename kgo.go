@@ -113,6 +113,7 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 	opts = append(opts,
 		kgo.WithHooks(&hookMeter{meter: k.opts.Meter}),
 		kgo.WithHooks(htracer),
+		kgo.WithHooks(&hookEvent{connected: k.connected}),
 	)
 
 	select {
@@ -390,7 +391,9 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		kgo.AutoCommitInterval(commitInterval),
 		kgo.OnPartitionsAssigned(sub.assigned),
 		kgo.OnPartitionsRevoked(sub.revoked),
+		kgo.StopProducerOnDataLossDetected(),
 		kgo.OnPartitionsLost(sub.lost),
+		kgo.AutoCommitCallback(sub.autocommit),
 		kgo.AutoCommitMarks(),
 	)
 
