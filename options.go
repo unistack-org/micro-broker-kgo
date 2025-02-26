@@ -72,6 +72,12 @@ func SubscribeOptions(opts ...kgo.Opt) broker.SubscribeOption {
 	}
 }
 
+type fatalOnErrorKey struct{}
+
+func FatalOnError(b bool) broker.Option {
+	return broker.SetOption(fatalOnErrorKey{}, b)
+}
+
 type clientIDKey struct{}
 
 func ClientID(id string) broker.Option {
@@ -96,6 +102,11 @@ type subscribeMaxInflightKey struct{}
 // SubscribeMaxInFlight max queued messages
 func SubscribeMaxInFlight(n int) broker.SubscribeOption {
 	return broker.SetSubscribeOption(subscribeMaxInflightKey{}, n)
+}
+
+// SubscribeMaxInFlight max queued messages
+func SubscribeFatalOnError(b bool) broker.SubscribeOption {
+	return broker.SetSubscribeOption(fatalOnErrorKey{}, b)
 }
 
 type publishPromiseKey struct{}

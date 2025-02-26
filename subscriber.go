@@ -50,7 +50,8 @@ type Subscriber struct {
 
 	connected *atomic.Uint32
 	sync.RWMutex
-	closed bool
+	closed       bool
+	fatalOnError bool
 }
 
 func (s *Subscriber) Client() *kgo.Client {
@@ -174,6 +175,9 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
 	if err != nil {
 		s.connected.Store(0)
+		if s.fatalOnError {
+			s.kopts.Logger.Fatal(context.TODO(), "kgo.AutoCommitCallback error", err)
+		}
 	}
 }
 
