@@ -267,7 +267,7 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		k.connected.Store(1)
 	}
 	k.Unlock()
-	fmt.Printf("EEE\n")
+
 	options := broker.NewPublishOptions(opts...)
 	records := make([]*kgo.Record, 0, len(msgs))
 	var errs []string
@@ -322,9 +322,9 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		return nil
 	}
 	ts := time.Now()
-	fmt.Printf("SSSSSSEEE\n")
+
 	results := k.c.ProduceSync(ctx, records...)
-	fmt.Printf("SSSSSS\n")
+
 	te := time.Since(ts)
 	for _, result := range results {
 		k.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())

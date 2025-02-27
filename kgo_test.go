@@ -2,7 +2,6 @@ package kgo_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -214,7 +213,7 @@ func TestPubSub(t *testing.T) {
 				if prc := atomic.LoadInt64(&idx); prc == msgcnt {
 					close(done)
 				} else {
-					fmt.Printf("processed %v\n", prc)
+					t.Logf("processed %v\n", prc)
 				}
 			case <-ticker.C:
 				close(done)
