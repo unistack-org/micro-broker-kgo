@@ -404,6 +404,7 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		consumers:    make(map[tp]*consumer),
 		done:         make(chan struct{}),
 		fatalOnError: fatalOnError,
+		connected:    k.connected,
 	}
 
 	kopts := append(k.kopts,
