@@ -143,9 +143,8 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 			return nil, nil, err
 		}
 		k.connected.Store(1)
+		return c, htracer, nil
 	}
-
-	return c, htracer, nil
 }
 
 func (k *Broker) Connect(ctx context.Context) error {
