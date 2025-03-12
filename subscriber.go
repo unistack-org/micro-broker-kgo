@@ -160,7 +160,10 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	for topic, partitions := range lost {
 		for _, partition := range partitions {
 			tps := tp{topic, partition}
-			pc := s.consumers[tps]
+			pc, ok := s.consumers[tps]
+			if !ok {
+				continue
+			}
 			delete(s.consumers, tps)
 			close(pc.quit)
 			if s.kopts.Logger.V(logger.DebugLevel) {
