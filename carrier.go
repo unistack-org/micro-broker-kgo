@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v3/metadata"
+	"go.unistack.org/micro/v4/metadata"
 )
 
 // RecordCarrier injects and extracts traces from a kgo.Record.
@@ -77,7 +77,7 @@ loop:
 		for i := 0; i < len(r.Headers); i++ {
 			if strings.EqualFold(r.Headers[i].Key, k) {
 				// Key exist, update the value.
-				r.Headers[i].Value = []byte(v)
+				r.Headers[i].Value = []byte(strings.Join(v, ","))
 				continue loop
 			}
 		}
@@ -85,7 +85,7 @@ loop:
 		// Key does not exist, append new header.
 		r.Headers = append(r.Headers, kgo.RecordHeader{
 			Key:   k,
-			Value: []byte(v),
+			Value: []byte(strings.Join(v, ",")),
 		})
 
 		seen[k] = struct{}{}

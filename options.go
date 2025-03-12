@@ -5,8 +5,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v3/broker"
-	"go.unistack.org/micro/v3/client"
+	"go.unistack.org/micro/v4/broker"
 )
 
 var (
@@ -33,11 +32,6 @@ type publishKey struct{}
 // PublishKey set the kafka message key (broker option)
 func PublishKey(key []byte) broker.PublishOption {
 	return broker.SetPublishOption(publishKey{}, key)
-}
-
-// ClientPublishKey set the kafka message key (client option)
-func ClientPublishKey(key []byte) client.PublishOption {
-	return client.SetPublishOption(publishKey{}, key)
 }
 
 type optionsKey struct{}
@@ -114,9 +108,4 @@ type publishPromiseKey struct{}
 // PublishPromise set the kafka promise func for Produce
 func PublishPromise(fn func(*kgo.Record, error)) broker.PublishOption {
 	return broker.SetPublishOption(publishPromiseKey{}, fn)
-}
-
-// ClientPublishKey set the kafka message key (client option)
-func ClientPublishPromise(fn func(*kgo.Record, error)) client.PublishOption {
-	return client.SetPublishOption(publishPromiseKey{}, fn)
 }

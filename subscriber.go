@@ -11,11 +11,11 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
-	"go.unistack.org/micro/v3/broker"
-	"go.unistack.org/micro/v3/logger"
-	"go.unistack.org/micro/v3/metadata"
-	"go.unistack.org/micro/v3/semconv"
-	"go.unistack.org/micro/v3/tracer"
+	"go.unistack.org/micro/v4/broker"
+	"go.unistack.org/micro/v4/logger"
+	"go.unistack.org/micro/v4/metadata"
+	"go.unistack.org/micro/v4/semconv"
+	"go.unistack.org/micro/v4/tracer"
 )
 
 type tp struct {
@@ -33,7 +33,7 @@ type consumer struct {
 	kopts     broker.Options
 	partition int32
 	opts      broker.SubscribeOptions
-	handler   broker.Handler
+	handler   interface{}
 	connected *atomic.Uint32
 }
 
@@ -43,7 +43,7 @@ type Subscriber struct {
 	htracer   *hookTracer
 	topic     string
 
-	handler broker.Handler
+	handler interface{}
 	done    chan struct{}
 	kopts   broker.Options
 	opts    broker.SubscribeOptions
@@ -225,15 +225,12 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 }
 
 func (pc *consumer) consume() {
+	var err error
+
 	defer close(pc.done)
 	if pc.kopts.Logger.V(logger.DebugLevel) {
 		pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("starting, topic %s partition %d", pc.topic, pc.partition))
 		defer pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("killing, topic %s partition %d", pc.topic, pc.partition))
-	}
-
-	eh := pc.kopts.ErrorHandler
-	if pc.opts.ErrorHandler != nil {
-		eh = pc.opts.ErrorHandler
 	}
 
 	for {
@@ -245,98 +242,48 @@ func (pc *consumer) consume() {
 				ctx, sp := pc.htracer.WithProcessSpan(record)
 				ts := time.Now()
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Inc()
-				p := eventPool.Get().(*event)
-				p.msg.Header = nil
-				p.msg.Body = nil
+				p := messagePool.Get().(*kgoMessage)
+
+				p.body = record.Value
 				p.topic = record.Topic
-				p.err = nil
 				p.ack = false
-				p.msg.Header = metadata.New(len(record.Headers))
+				p.hdr = metadata.New(len(record.Headers))
 				p.ctx = ctx
 				for _, hdr := range record.Headers {
-					p.msg.Header.Set(hdr.Key, string(hdr.Value))
+					p.hdr.Set(hdr.Key, string(hdr.Value))
 				}
-				if pc.kopts.Codec.String() == "noop" {
-					p.msg.Body = record.Value
-				} else if pc.opts.BodyOnly {
-					p.msg.Body = record.Value
-				} else {
-					sp.AddEvent("codec unmarshal start")
-					err := pc.kopts.Codec.Unmarshal(record.Value, p.msg)
-					sp.AddEvent("codec unmarshal stop")
-					if err != nil {
-						sp.SetStatus(tracer.SpanStatusError, err.Error())
-						pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
-						p.err = err
-						p.msg.Body = record.Value
-						if eh != nil {
-							_ = eh(p)
-							pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
-							if p.ack {
-								pc.c.MarkCommitRecords(record)
-							} else {
-								eventPool.Put(p)
-								pc.connected.Store(0)
-								pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
-								return
-							}
-							eventPool.Put(p)
-							te := time.Since(ts)
-							pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-							pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-							continue
-						} else {
-							pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: unmarshal error", err)
-						}
-						te := time.Since(ts)
-						pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
-						pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-						pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-						eventPool.Put(p)
-						pc.connected.Store(0)
-						pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
-						sp.Finish()
-						return
-					}
+
+				switch h := pc.handler.(type) {
+				case func(broker.Message) error:
+					err = h(p)
+				case func([]broker.Message) error:
+					err = h([]broker.Message{p})
 				}
-				sp.AddEvent("handler start")
-				err := pc.handler(p)
-				sp.AddEvent("handler stop")
-				if err == nil {
-					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "success").Inc()
-				} else {
+
+				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
+				if err != nil {
 					sp.SetStatus(tracer.SpanStatusError, err.Error())
 					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
-				}
-				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
-				if err == nil && pc.opts.AutoAck {
+				} else if pc.opts.AutoAck {
 					p.ack = true
-				} else if err != nil {
-					p.err = err
-					if eh != nil {
-						sp.AddEvent("error handler start")
-						_ = eh(p)
-						sp.AddEvent("error handler stop")
-					} else {
-						if pc.kopts.Logger.V(logger.ErrorLevel) {
-							pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: subscriber error", err)
-						}
-					}
 				}
+
 				te := time.Since(ts)
 				pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 				pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-				if p.ack {
-					eventPool.Put(p)
+
+				ack := p.ack
+				messagePool.Put(p)
+
+				if ack {
 					pc.c.MarkCommitRecords(record)
 				} else {
-					eventPool.Put(p)
-					pc.connected.Store(0)
-					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
-					sp.SetStatus(tracer.SpanStatusError, "ErrLostMessage")
 					sp.Finish()
+					pc.connected.Store(0)
+					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] message not commited")
 					return
 				}
+
 				sp.Finish()
 			}
 		}

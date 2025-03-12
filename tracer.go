@@ -6,8 +6,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
-	"go.unistack.org/micro/v3/metadata"
-	"go.unistack.org/micro/v3/tracer"
+	"go.unistack.org/micro/v4/metadata"
+	"go.unistack.org/micro/v4/tracer"
 )
 
 type hookTracer struct {

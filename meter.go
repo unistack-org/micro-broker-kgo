@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v3/meter"
+	"go.unistack.org/micro/v4/meter"
 )
 
 type hookMeter struct {
