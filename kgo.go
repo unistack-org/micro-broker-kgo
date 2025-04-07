@@ -19,6 +19,7 @@ import (
 	"go.unistack.org/micro/v3/metadata"
 	"go.unistack.org/micro/v3/semconv"
 	"go.unistack.org/micro/v3/tracer"
+	mjitter "go.unistack.org/micro/v3/util/jitter"
 	mrand "go.unistack.org/micro/v3/util/rand"
 )
 
@@ -66,6 +67,8 @@ type Broker struct {
 
 	sync.RWMutex
 	init bool
+
+	done chan struct{}
 }
 
 func (r *Broker) Live() bool {
@@ -143,6 +146,25 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 			return nil, nil, err
 		}
 		k.connected.Store(1)
+
+		if fatalOnError {
+			go func() {
+				c := 3
+				n := 0
+				tc := mjitter.NewTicker(500*time.Millisecond, 1*time.Second)
+				defer tc.Stop()
+				for range tc.C {
+					if k.connected.Load() == 0 {
+						if n > c {
+							k.opts.Logger.Fatal(context.Background(), "broker fatal error")
+						}
+						n++
+					} else {
+						n = 0
+					}
+				}
+			}()
+		}
 		return c, htracer, nil
 	}
 }
@@ -204,6 +226,7 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 	}
 
 	k.connected.Store(0)
+	close(k.done)
 	return nil
 }
 
@@ -391,12 +414,6 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		}
 	}
 
-	if options.Context != nil {
-		if v, ok := options.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
-			fatalOnError = v
-		}
-	}
-
 	sub := &Subscriber{
 		topic:        topic,
 		opts:         options,
@@ -492,5 +509,6 @@ func NewBroker(opts ...broker.Option) *Broker {
 		connected: &atomic.Uint32{},
 		opts:      options,
 		kopts:     kopts,
+		done:      make(chan struct{}),
 	}
 }

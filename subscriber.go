@@ -199,7 +199,7 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
 		s.kopts.Logger.Error(ctx, "[kgo] revoked CommitMarkedOffsets error", err)
-		// s.connected.Store(0)
+		s.connected.Store(0)
 	}
 }
 

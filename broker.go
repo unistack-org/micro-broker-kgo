@@ -27,19 +27,19 @@ var (
 
 func (m *hookEvent) OnGroupManageError(err error) {
 	if err != nil {
-		// m.connected.Store(0)
-		if m.fatalOnError {
-			m.log.Fatal(context.TODO(), "kgo.OnGroupManageError", err)
-		}
+		m.connected.Store(0)
+		// if m.fatalOnError {
+		m.log.Error(context.TODO(), "kgo.OnGroupManageError", err)
+		//}
 	}
 }
 
 func (m *hookEvent) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	if err != nil {
 		// m.connected.Store(0)
-		if m.fatalOnError {
-			m.log.Fatal(context.TODO(), "kgo.OnBrokerConnect", err)
-		}
+		// if m.fatalOnError {
+		m.log.Error(context.TODO(), "kgo.OnBrokerConnect", err)
+		//}
 	}
 }
 
@@ -50,20 +50,22 @@ func (m *hookEvent) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
 func (m *hookEvent) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
 	if err != nil {
 		// m.connected.Store(0)
-		if m.fatalOnError {
-			m.log.Fatal(context.TODO(), "kgo.OnBrokerWrite", err)
-		}
+		// if m.fatalOnError {
+		m.log.Error(context.TODO(), "kgo.OnBrokerWrite", err)
+		//}
 	}
 }
 
 func (m *hookEvent) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
 	if err != nil {
 		// m.connected.Store(0)
+		m.log.Error(context.TODO(), "kgo.OnBrokerRead", err)
 	}
 }
 
 func (m *hookEvent) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
 	if err != nil {
 		// m.connected.Store(0)
+		m.log.Error(context.TODO(), "kgo.OnProduceRecordUnbuffered", err)
 	}
 }
