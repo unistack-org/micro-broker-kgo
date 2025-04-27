@@ -3,15 +3,12 @@ name: test
 on:
   pull_request:
     types: [opened, reopened, synchronize]
-    branches:
-    - master
-    - v3
-    - v4
+    branches: [ master, v3, v4 ]
   push:
-    branches:
-    - master
-    - v3
-    - v4
+    branches: [ master, v3, v4 ]
+    paths-ignore:
+      - '.github/**'
+      - '.gitea/**'
 
 jobs:
   test:
@@ -39,7 +36,7 @@ jobs:
       run: |
         go work init
         go work use .
-        go work use micro-tests        
+        go work use micro-tests
     - name: setup deps
       env:
         GOWORK: /workspace/${{ github.repository_owner }}/go.work
@@ -50,4 +47,4 @@ jobs:
         GOWORK: /workspace/${{ github.repository_owner }}/go.work
       run: |
         cd micro-tests
-        go test -mod readonly -v ./... || true        
+        go test -mod readonly -v ./... || true
