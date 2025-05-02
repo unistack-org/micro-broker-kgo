@@ -177,7 +177,7 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 
 func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
 	if err != nil {
-		s.connected.Store(0)
+		//		s.connected.Store(0)
 		if s.fatalOnError {
 			s.kopts.Logger.Fatal(context.TODO(), "kgo.AutoCommitCallback error", err)
 		}
@@ -282,7 +282,7 @@ func (pc *consumer) consume() {
 					pc.c.MarkCommitRecords(record)
 				} else {
 					sp.Finish()
-					pc.connected.Store(0)
+					//					pc.connected.Store(0)
 					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] message not commited")
 					return
 				}
