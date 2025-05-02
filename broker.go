@@ -27,7 +27,7 @@ var (
 
 func (m *hookEvent) OnGroupManageError(err error) {
 	if err != nil {
-		m.connected.Store(0)
+		// m.connected.Store(0)
 		// if m.fatalOnError {
 		m.log.Error(context.TODO(), "kgo.OnGroupManageError", err)
 		//}
