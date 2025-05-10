@@ -146,7 +146,12 @@ func (s *Subscriber) poll(ctx context.Context) {
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 				tps := tp{p.Topic, p.Partition}
-				s.consumers[tps].recs <- p
+				s.Lock()
+				c := s.consumers[tps]
+				s.Unlock()
+				if c != nil {
+					c.recs <- p
+				}
 			})
 			s.c.AllowRebalance()
 		}
@@ -160,11 +165,15 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	for topic, partitions := range lost {
 		for _, partition := range partitions {
 			tps := tp{topic, partition}
+			s.Lock()
 			pc, ok := s.consumers[tps]
+			s.Unlock()
 			if !ok {
 				continue
 			}
+			s.Lock()
 			delete(s.consumers, tps)
+			s.Unlock()
 			close(pc.quit)
 			if s.kopts.Logger.V(logger.DebugLevel) {
 				s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] waiting for work to finish topic %s partition %d", topic, partition))
