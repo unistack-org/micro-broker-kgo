@@ -56,14 +56,7 @@ func (m *hookEvent) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.D
 	}
 }
 
-func (m *hookEvent) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err != nil {
-		//	m.connected.Store(0)
-	}
+func (m *hookEvent) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, _ error) {
 }
 
-func (m *hookEvent) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
-	if err != nil {
-		//	m.connected.Store(0)
-	}
-}
+func (m *hookEvent) OnProduceRecordUnbuffered(_ *kgo.Record, _ error) {}

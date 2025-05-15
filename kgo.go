@@ -74,7 +74,7 @@ type Broker struct {
 
 	opts broker.Options
 
-	sync.RWMutex
+	mu   sync.RWMutex
 	init bool
 }
 
@@ -141,9 +141,9 @@ func (b *Broker) newCodec(ct string) (codec.Codec, error) {
 	if idx := strings.IndexRune(ct, ';'); idx >= 0 {
 		ct = ct[:idx]
 	}
-	b.RLock()
+	b.mu.RLock()
 	c, ok := b.opts.Codecs[ct]
-	b.RUnlock()
+	b.mu.RUnlock()
 	if ok {
 		return c, nil
 	}
@@ -234,10 +234,10 @@ func (k *Broker) Connect(ctx context.Context) error {
 		return err
 	}
 
-	k.Lock()
+	k.mu.Lock()
 	k.c = c
 	k.connected.Store(1)
-	k.Unlock()
+	k.mu.Unlock()
 
 	return nil
 }
@@ -255,8 +255,8 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 	ctx, span = k.opts.Tracer.Start(ctx, "Disconnect")
 	defer span.Finish()
 
-	k.Lock()
-	defer k.Unlock()
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	select {
 	case <-nctx.Done():
 		return nctx.Err()
@@ -280,8 +280,8 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 }
 
 func (k *Broker) Init(opts ...broker.Option) error {
-	k.Lock()
-	defer k.Unlock()
+	k.mu.Lock()
+	defer k.mu.Unlock()
 
 	if len(opts) == 0 && k.init {
 		return nil
@@ -345,9 +345,9 @@ func (b *Broker) publish(ctx context.Context, topic string, messages ...broker.M
 		if err != nil {
 			return err
 		}
-		b.Lock()
+		b.mu.Lock()
 		b.c = c
-		b.Unlock()
+		b.mu.Unlock()
 	}
 
 	records := make([]*kgo.Record, 0, len(messages))
@@ -540,9 +540,9 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 
 	go sub.poll(ctx)
 
-	b.Lock()
+	b.mu.Lock()
 	b.subs = append(b.subs, sub)
-	b.Unlock()
+	b.mu.Unlock()
 
 	return sub, nil
 }
