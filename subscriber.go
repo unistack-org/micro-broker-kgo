@@ -39,7 +39,6 @@ type consumer struct {
 }
 
 type Subscriber struct {
-<<<<<<< HEAD
 	consumers    map[tp]*consumer
 	c            *kgo.Client
 	htracer      *hookTracer
