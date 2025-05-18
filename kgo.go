@@ -478,10 +478,14 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 		}
 	}
 
+	var messagePool bool
 	var fatalOnError bool
 	if b.opts.Context != nil {
 		if v, ok := b.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
 			fatalOnError = v
+		}
+		if v, ok := b.opts.Context.Value(subscribeMessagePoolKey{}).(bool); ok && v {
+			messagePool = v
 		}
 	}
 
@@ -500,6 +504,7 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 		done:         make(chan struct{}),
 		fatalOnError: fatalOnError,
 		connected:    b.connected,
+		messagePool:  messagePool,
 	}
 
 	kopts := append(b.kopts,

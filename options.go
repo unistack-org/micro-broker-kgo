@@ -109,3 +109,10 @@ type publishPromiseKey struct{}
 func PublishPromise(fn func(*kgo.Record, error)) broker.PublishOption {
 	return broker.SetPublishOption(publishPromiseKey{}, fn)
 }
+
+type subscribeMessagePoolKey struct{}
+
+// SubscribeMessagePool optionaly enabled/disable message pool
+func SubscribeMessagePool(b bool) broker.SubscribeOption {
+	return broker.SetSubscribeOption(subscribeMessagePoolKey{}, b)
+}
