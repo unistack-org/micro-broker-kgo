@@ -116,3 +116,10 @@ type subscribeMessagePoolKey struct{}
 func SubscribeMessagePool(b bool) broker.SubscribeOption {
 	return broker.SetSubscribeOption(subscribeMessagePoolKey{}, b)
 }
+
+type subscribeMessagePoolKey struct{}
+
+// SubscribeMessagePool optionaly enabled/disable message pool
+func SubscribeMessagePool(b bool) broker.SubscribeOption {
+	return broker.SetSubscribeOption(subscribeMessagePoolKey{}, b)
+}
