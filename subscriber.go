@@ -24,29 +24,30 @@ type tp struct {
 }
 
 type consumer struct {
-	topic     string
-	c         *kgo.Client
-	htracer   *hookTracer
-	quit      chan struct{}
-	done      chan struct{}
-	recs      chan kgo.FetchTopicPartition
-	kopts     broker.Options
-	partition int32
-	opts      broker.SubscribeOptions
-	handler   interface{}
-	connected *atomic.Uint32
+	topic       string
+	c           *kgo.Client
+	htracer     *hookTracer
+	quit        chan struct{}
+	done        chan struct{}
+	recs        chan kgo.FetchTopicPartition
+	kopts       broker.Options
+	partition   int32
+	opts        broker.SubscribeOptions
+	handler     interface{}
+	connected   *atomic.Uint32
+	messagePool bool
 }
 
 type Subscriber struct {
-	consumers map[tp]*consumer
-	c         *kgo.Client
-	htracer   *hookTracer
-	topic     string
-
-	handler interface{}
-	done    chan struct{}
-	kopts   broker.Options
-	opts    broker.SubscribeOptions
+	consumers   map[tp]*consumer
+	c           *kgo.Client
+	htracer     *hookTracer
+	topic       string
+	messagePool bool
+	handler     interface{}
+	done        chan struct{}
+	kopts       broker.Options
+	opts        broker.SubscribeOptions
 
 	connected *atomic.Uint32
 	sync.RWMutex
@@ -216,17 +217,18 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 	for topic, partitions := range assigned {
 		for _, partition := range partitions {
 			pc := &consumer{
-				c:         c,
-				topic:     topic,
-				partition: partition,
-				htracer:   s.htracer,
-				quit:      make(chan struct{}),
-				done:      make(chan struct{}),
-				recs:      make(chan kgo.FetchTopicPartition, 100),
-				handler:   s.handler,
-				kopts:     s.kopts,
-				opts:      s.opts,
-				connected: s.connected,
+				c:           c,
+				topic:       topic,
+				partition:   partition,
+				htracer:     s.htracer,
+				quit:        make(chan struct{}),
+				done:        make(chan struct{}),
+				recs:        make(chan kgo.FetchTopicPartition, 100),
+				handler:     s.handler,
+				messagePool: s.messagePool,
+				kopts:       s.kopts,
+				opts:        s.opts,
+				connected:   s.connected,
 			}
 			s.Lock()
 			s.consumers[tp{topic, partition}] = pc
@@ -245,6 +247,8 @@ func (pc *consumer) consume() {
 		defer pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("killing, topic %s partition %d", pc.topic, pc.partition))
 	}
 
+	var pm *kgoMessage
+
 	for {
 		select {
 		case <-pc.quit:
@@ -254,22 +258,26 @@ func (pc *consumer) consume() {
 				ctx, sp := pc.htracer.WithProcessSpan(record)
 				ts := time.Now()
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Inc()
-				p := messagePool.Get().(*kgoMessage)
 
-				p.body = record.Value
-				p.topic = record.Topic
-				p.ack = false
-				p.hdr = metadata.New(len(record.Headers))
-				p.ctx = ctx
+				if pc.messagePool {
+					pm = messagePool.Get().(*kgoMessage)
+				} else {
+					pm = &kgoMessage{}
+				}
+				pm.body = record.Value
+				pm.topic = record.Topic
+				pm.ack = false
+				pm.hdr = metadata.New(len(record.Headers))
+				pm.ctx = ctx
 				for _, hdr := range record.Headers {
-					p.hdr.Set(hdr.Key, string(hdr.Value))
+					pm.hdr.Set(hdr.Key, string(hdr.Value))
 				}
 
 				switch h := pc.handler.(type) {
 				case func(broker.Message) error:
-					err = h(p)
+					err = h(pm)
 				case func([]broker.Message) error:
-					err = h([]broker.Message{p})
+					err = h([]broker.Message{pm})
 				}
 
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
@@ -277,16 +285,17 @@ func (pc *consumer) consume() {
 					sp.SetStatus(tracer.SpanStatusError, err.Error())
 					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 				} else if pc.opts.AutoAck {
-					p.ack = true
+					pm.ack = true
 				}
 
 				te := time.Since(ts)
 				pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 				pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 
-				ack := p.ack
-				messagePool.Put(p)
-
+				ack := pm.ack
+				if pc.messagePool {
+					messagePool.Put(p)
+				}
 				if ack {
 					pc.c.MarkCommitRecords(record)
 				} else {
