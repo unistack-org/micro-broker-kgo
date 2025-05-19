@@ -282,7 +282,9 @@ func (pc *consumer) consume() {
 
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
 				if err != nil {
-					sp.SetStatus(tracer.SpanStatusError, err.Error())
+					if sp != nil {
+						sp.SetStatus(tracer.SpanStatusError, err.Error())
+					}
 					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 				} else if pc.opts.AutoAck {
 					pm.ack = true
@@ -299,13 +301,16 @@ func (pc *consumer) consume() {
 				if ack {
 					pc.c.MarkCommitRecords(record)
 				} else {
-					sp.Finish()
+					if sp != nil {
+						sp.Finish()
+					}
 					//					pc.connected.Store(0)
 					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] message not commited")
 					return
 				}
-
-				sp.Finish()
+				if sp != nil {
+					sp.Finish()
+				}
 			}
 		}
 	}

@@ -32,6 +32,9 @@ var (
 // the record's context, so it can be ended in the OnProduceRecordUnbuffered
 // hook.
 func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
+	if !m.tracer.Enabled() {
+		return
+	}
 	// Set up span options.
 	attrs := []interface{}{
 		messagingSystem,
@@ -77,6 +80,9 @@ func (m *hookTracer) OnProduceRecordBuffered(r *kgo.Record) {
 // It sets attributes with values unset when producing and records any error
 // that occurred during the publish operation.
 func (m *hookTracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
+	if !m.tracer.Enabled() {
+		return
+	}
 	if span, ok := tracer.SpanFromContext(r.Context); ok {
 		span.AddLabels(
 			semconv.MessagingKafkaDestinationPartition(int(r.Partition)),
@@ -96,6 +102,9 @@ func (m *hookTracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 // OnFetchRecordUnbuffered hook and can be used in downstream consumer
 // processing.
 func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
+	if !m.tracer.Enabled() {
+		return
+	}
 	// Set up the span options.
 	attrs := []interface{}{
 		messagingSystem,
@@ -141,6 +150,9 @@ func (m *hookTracer) OnFetchRecordBuffered(r *kgo.Record) {
 // OnFetchRecordUnbuffered continues and ends the "receive" span for an
 // unbuffered record.
 func (m *hookTracer) OnFetchRecordUnbuffered(r *kgo.Record, _ bool) {
+	if !m.tracer.Enabled() {
+		return
+	}
 	span, _ := tracer.SpanFromContext(r.Context)
 	span.Finish()
 }
@@ -155,6 +167,13 @@ func (m *hookTracer) OnFetchRecordUnbuffered(r *kgo.Record, _ bool) {
 // not a record which has been created for producing, so call this at the start of each
 // iteration of your processing for the record.
 func (m *hookTracer) WithProcessSpan(r *kgo.Record) (context.Context, tracer.Span) {
+	if r.Context == nil {
+		r.Context = context.Background()
+	}
+
+	if !m.tracer.Enabled() {
+		return r.Context, nil
+	}
 	// Set up the span options.
 	attrs := []interface{}{
 		messagingSystem,
