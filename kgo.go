@@ -60,15 +60,15 @@ type Broker struct {
 	c         *kgo.Client
 	connected *atomic.Uint32
 
+	done chan struct{}
+
 	kopts []kgo.Opt
 	subs  []*Subscriber
 
 	opts broker.Options
-
 	sync.RWMutex
-	init bool
 
-	done chan struct{}
+	init bool
 }
 
 func (r *Broker) Live() bool {
