@@ -24,34 +24,44 @@ type tp struct {
 }
 
 type consumer struct {
-	topic     string
+	topic string
+
 	c         *kgo.Client
 	htracer   *hookTracer
-	quit      chan struct{}
-	done      chan struct{}
-	recs      chan kgo.FetchTopicPartition
-	kopts     broker.Options
-	partition int32
-	opts      broker.SubscribeOptions
-	handler   broker.Handler
 	connected *atomic.Uint32
+
+	quit chan struct{}
+	done chan struct{}
+	recs chan kgo.FetchTopicPartition
+
+	handler broker.Handler
+
+	kopts broker.Options
+	opts  broker.SubscribeOptions
+
+	partition int32
 }
 
 type Subscriber struct {
+	topic string
+
 	consumers map[tp]*consumer
+
 	c         *kgo.Client
 	htracer   *hookTracer
-	topic     string
+	connected *atomic.Uint32
 
 	handler broker.Handler
-	done    chan struct{}
-	kopts   broker.Options
-	opts    broker.SubscribeOptions
 
-	connected *atomic.Uint32
-	sync.RWMutex
+	done chan struct{}
+
+	kopts broker.Options
+	opts  broker.SubscribeOptions
+
 	closed       bool
 	fatalOnError bool
+
+	sync.RWMutex
 }
 
 func (s *Subscriber) Client() *kgo.Client {

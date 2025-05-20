@@ -8,7 +8,7 @@ require (
 	github.com/twmb/franz-go/pkg/kadm v1.15.0
 	github.com/twmb/franz-go/pkg/kmsg v1.9.0
 	go.opentelemetry.io/otel v1.34.0
-	go.unistack.org/micro/v3 v3.11.41
+	go.unistack.org/micro/v3 v3.11.44
 )
 
 require (

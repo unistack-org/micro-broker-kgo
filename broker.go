@@ -12,8 +12,8 @@ import (
 
 type hookEvent struct {
 	log          logger.Logger
-	fatalOnError bool
 	connected    *atomic.Uint32
+	fatalOnError bool
 }
 
 var (
