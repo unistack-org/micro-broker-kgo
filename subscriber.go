@@ -274,11 +274,17 @@ func (pc *consumer) consume() {
 				} else if pc.opts.BodyOnly {
 					p.msg.Body = record.Value
 				} else {
-					sp.AddEvent("codec unmarshal start")
+					if sp != nil {
+						sp.AddEvent("codec unmarshal start")
+					}
 					err := pc.kopts.Codec.Unmarshal(record.Value, p.msg)
-					sp.AddEvent("codec unmarshal stop")
+					if sp != nil {
+						sp.AddEvent("codec unmarshal stop")
+					}
 					if err != nil {
-						sp.SetStatus(tracer.SpanStatusError, err.Error())
+						if sp != nil {
+							sp.SetStatus(tracer.SpanStatusError, err.Error())
+						}
 						pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 						p.err = err
 						p.msg.Body = record.Value
@@ -308,17 +314,25 @@ func (pc *consumer) consume() {
 						eventPool.Put(p)
 						//						pc.connected.Store(0)
 						pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] Unmarshal err not handled wtf?")
-						sp.Finish()
+						if sp != nil {
+							sp.Finish()
+						}
 						return
 					}
 				}
-				sp.AddEvent("handler start")
+				if sp != nil {
+					sp.AddEvent("handler start")
+				}
 				err := pc.handler(p)
-				sp.AddEvent("handler stop")
+				if sp != nil {
+					sp.AddEvent("handler stop")
+				}
 				if err == nil {
 					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "success").Inc()
 				} else {
-					sp.SetStatus(tracer.SpanStatusError, err.Error())
+					if sp != nil {
+						sp.SetStatus(tracer.SpanStatusError, err.Error())
+					}
 					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 				}
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
@@ -327,9 +341,13 @@ func (pc *consumer) consume() {
 				} else if err != nil {
 					p.err = err
 					if eh != nil {
-						sp.AddEvent("error handler start")
+						if sp != nil {
+							sp.AddEvent("error handler start")
+						}
 						_ = eh(p)
-						sp.AddEvent("error handler stop")
+						if sp != nil {
+							sp.AddEvent("error handler stop")
+						}
 					} else {
 						if pc.kopts.Logger.V(logger.ErrorLevel) {
 							pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: subscriber error", err)
@@ -346,11 +364,15 @@ func (pc *consumer) consume() {
 					eventPool.Put(p)
 					//					pc.connected.Store(0)
 					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] ErrLostMessage wtf?")
-					sp.SetStatus(tracer.SpanStatusError, "ErrLostMessage")
-					sp.Finish()
+					if sp != nil {
+						sp.SetStatus(tracer.SpanStatusError, "ErrLostMessage")
+						sp.Finish()
+					}
 					return
 				}
-				sp.Finish()
+				if sp != nil {
+					sp.Finish()
+				}
 			}
 		}
 	}

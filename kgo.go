@@ -287,6 +287,7 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 			k.Unlock()
 			return err
 		}
+		k.c.Close()
 		k.c = c
 		k.connected.Store(1)
 	}
