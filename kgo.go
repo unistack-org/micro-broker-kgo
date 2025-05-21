@@ -280,18 +280,6 @@ func (k *Broker) Publish(ctx context.Context, topic string, msg *broker.Message,
 }
 
 func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
-	k.Lock()
-	if k.connected.Load() == 0 {
-		c, _, err := k.connect(ctx, k.kopts...)
-		if err != nil {
-			k.Unlock()
-			return err
-		}
-		k.c = c
-		k.connected.Store(1)
-	}
-	k.Unlock()
-
 	options := broker.NewPublishOptions(opts...)
 	records := make([]*kgo.Record, 0, len(msgs))
 	var errs []string
