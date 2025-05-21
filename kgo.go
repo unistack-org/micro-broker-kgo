@@ -344,23 +344,12 @@ func (b *Broker) fnPublish(ctx context.Context, topic string, messages ...broker
 }
 
 func (b *Broker) publish(ctx context.Context, topic string, messages ...broker.Message) error {
-	if b.connected.Load() == 0 {
-		c, _, err := b.connect(ctx, b.kopts...)
-		if err != nil {
-			return err
-		}
-		b.Lock()
-		b.c = c
-		b.Unlock()
-	}
-
 	records := make([]*kgo.Record, 0, len(messages))
 	var errs []string
 	var key []byte
 	var promise func(*kgo.Record, error)
 
 	for _, msg := range messages {
-
 		if mctx := msg.Context(); mctx != nil {
 			if k, ok := mctx.Value(publishKey{}).([]byte); ok && k != nil {
 				key = k

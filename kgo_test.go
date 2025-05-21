@@ -222,7 +222,7 @@ func TestPubSub(t *testing.T) {
 				if prc := atomic.LoadInt64(&idx); prc == msgcnt {
 					close(done)
 				} else {
-					t.Logf("processed %v\n", prc)
+					t.Logf("processed %v of %v\n", prc, msgcnt)
 				}
 			case <-ticker.C:
 				close(done)
