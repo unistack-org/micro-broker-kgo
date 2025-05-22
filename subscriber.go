@@ -49,8 +49,8 @@ type Subscriber struct {
 	kopts       broker.Options
 	opts        broker.SubscribeOptions
 
-	connected *atomic.Uint32
-	sync.RWMutex
+	connected    *atomic.Uint32
+	mu           sync.RWMutex
 	closed       bool
 	fatalOnError bool
 }
@@ -118,11 +118,11 @@ func (s *Subscriber) poll(ctx context.Context) {
 					continue
 				}
 
-				s.Lock()
+				s.mu.Lock()
 				for p, l := range lmap {
 					s.kopts.Meter.Counter(semconv.BrokerGroupLag, "topic", s.topic, "group", s.opts.Group, "partition", strconv.Itoa(int(p))).Set(uint64(l.Lag))
 				}
-				s.Unlock()
+				s.mu.Unlock()
 
 			}
 		}
@@ -230,9 +230,9 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 				opts:        s.opts,
 				connected:   s.connected,
 			}
-			s.Lock()
+			s.mu.Lock()
 			s.consumers[tp{topic, partition}] = pc
-			s.Unlock()
+			s.mu.Unlock()
 			go pc.consume()
 		}
 	}
