@@ -117,6 +117,10 @@ func TestFail(t *testing.T) {
 }
 
 func TestConnect(t *testing.T) {
+	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
+		t.Skip()
+	}
+
 	var addrs []string
 	ctx := context.TODO()
 	b := kgo.NewBroker(
