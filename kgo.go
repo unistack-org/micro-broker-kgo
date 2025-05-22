@@ -56,7 +56,6 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 	}
 }()
 
-//nolint:govet
 type Broker struct {
 	c         *kgo.Client
 	connected *atomic.Uint32
