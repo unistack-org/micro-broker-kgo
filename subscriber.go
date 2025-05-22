@@ -39,16 +39,15 @@ type consumer struct {
 }
 
 type Subscriber struct {
-	consumers   map[tp]*consumer
-	c           *kgo.Client
-	htracer     *hookTracer
-	topic       string
-	messagePool bool
-	handler     interface{}
-	done        chan struct{}
-	kopts       broker.Options
-	opts        broker.SubscribeOptions
-
+	consumers    map[tp]*consumer
+	c            *kgo.Client
+	htracer      *hookTracer
+	topic        string
+	messagePool  bool
+	handler      interface{}
+	done         chan struct{}
+	kopts        broker.Options
+	opts         broker.SubscribeOptions
 	connected    *atomic.Uint32
 	mu           sync.RWMutex
 	closed       bool
