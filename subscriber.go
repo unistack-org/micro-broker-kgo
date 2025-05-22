@@ -23,6 +23,7 @@ type tp struct {
 	p int32
 }
 
+//nolint:govet
 type consumer struct {
 	topic     string
 	c         *kgo.Client
@@ -37,6 +38,7 @@ type consumer struct {
 	connected *atomic.Uint32
 }
 
+//nolint:govet
 type Subscriber struct {
 	consumers map[tp]*consumer
 	c         *kgo.Client

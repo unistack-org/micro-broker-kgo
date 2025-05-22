@@ -10,6 +10,7 @@ import (
 	"go.unistack.org/micro/v3/logger"
 )
 
+//nolint:govet
 type hookEvent struct {
 	log          logger.Logger
 	fatalOnError bool
