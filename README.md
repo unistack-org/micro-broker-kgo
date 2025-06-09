@@ -1,2 +1,2 @@
 # micro-broker-kgo
-![Coverage](https://img.shields.io/badge/Coverage-65.1%25-yellow)
+![Coverage](https://img.shields.io/badge/Coverage-63.0%25-yellow)
