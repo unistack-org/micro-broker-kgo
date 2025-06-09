@@ -27,11 +27,11 @@ func SubscribeContext(ctx context.Context) broker.SubscribeOption {
 	return broker.SetSubscribeOption(subscribeContextKey{}, ctx)
 }
 
-type publishKey struct{}
+type messageKey struct{}
 
-// PublishKey set the kafka message key (broker option)
-func PublishKey(key []byte) broker.PublishOption {
-	return broker.SetPublishOption(publishKey{}, key)
+// MessageKey set the kafka message key (broker option)
+func MessageKey(key []byte) broker.MessageOption {
+	return broker.SetMessageOption(messageKey{}, key)
 }
 
 type optionsKey struct{}
@@ -103,11 +103,11 @@ func SubscribeFatalOnError(b bool) broker.SubscribeOption {
 	return broker.SetSubscribeOption(fatalOnErrorKey{}, b)
 }
 
-type publishPromiseKey struct{}
+type messagePromiseKey struct{}
 
-// PublishPromise set the kafka promise func for Produce
-func PublishPromise(fn func(*kgo.Record, error)) broker.PublishOption {
-	return broker.SetPublishOption(publishPromiseKey{}, fn)
+// MessagePromise set the kafka promise func for Produce
+func MessagePromise(fn func(*kgo.Record, error)) broker.MessageOption {
+	return broker.SetMessageOption(messagePromiseKey{}, fn)
 }
 
 type subscribeMessagePoolKey struct{}
