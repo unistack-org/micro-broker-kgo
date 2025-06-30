@@ -81,7 +81,7 @@ func TestFail(t *testing.T) {
 	go func() {
 		for _, msg := range msgs {
 			//		t.Logf("broker publish")
-			if err := b.Publish(ctx, "test", msg); err != nil {
+			if err := b.Publish(ctx, "test.fail", msg); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -96,7 +96,7 @@ func TestFail(t *testing.T) {
 		return msg.Ack()
 	}
 
-	sub, err := b.Subscribe(ctx, "test", fn,
+	sub, err := b.Subscribe(ctx, "test.fail", fn,
 		broker.SubscribeAutoAck(true),
 		broker.SubscribeGroup(group),
 		broker.SubscribeBodyOnly(true))
@@ -184,7 +184,7 @@ func TestPubSub(t *testing.T) {
 			msgs = append(msgs, m)
 		}
 
-		if err := b.Publish(ctx, "test", msgs...); err != nil {
+		if err := b.Publish(ctx, "test.pubsub", msgs...); err != nil {
 			t.Fatal(err)
 		}
 		//	t.Skip()
@@ -197,7 +197,7 @@ func TestPubSub(t *testing.T) {
 		return msg.Ack()
 	}
 
-	sub, err := b.Subscribe(ctx, "test", fn,
+	sub, err := b.Subscribe(ctx, "test.pubsub", fn,
 		broker.SubscribeAutoAck(true),
 		broker.SubscribeGroup(group),
 		broker.SubscribeBodyOnly(true))
