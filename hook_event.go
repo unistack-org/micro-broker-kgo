@@ -26,46 +26,48 @@ var (
 )
 
 func (m *hookEvent) OnGroupManageError(err error) {
-	if err != nil {
-		// m.connected.Store(0)
-		// if m.fatalOnError {
+	switch {
+	case err == nil || isContextError(err) || kgo.IsRetryableBrokerErr(err):
+		return
+	default:
 		m.log.Error(context.TODO(), "kgo.OnGroupManageError", err)
-		//}
 	}
 }
 
 func (m *hookEvent) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
-	if err != nil {
-		// m.connected.Store(0)
-		// if m.fatalOnError {
+	switch {
+	case err == nil || isContextError(err) || kgo.IsRetryableBrokerErr(err):
+		return
+	default:
 		m.log.Error(context.TODO(), "kgo.OnBrokerConnect", err)
-		//}
 	}
 }
 
-func (m *hookEvent) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
-	// m.connected.Store(0)
-}
+func (m *hookEvent) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {}
 
 func (m *hookEvent) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err != nil {
-		// m.connected.Store(0)
-		// if m.fatalOnError {
+	switch {
+	case err == nil || isContextError(err) || kgo.IsRetryableBrokerErr(err):
+		return
+	default:
 		m.log.Error(context.TODO(), "kgo.OnBrokerWrite", err)
-		//}
 	}
 }
 
 func (m *hookEvent) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err != nil {
-		// m.connected.Store(0)
+	switch {
+	case err == nil || isContextError(err) || kgo.IsRetryableBrokerErr(err):
+		return
+	default:
 		m.log.Error(context.TODO(), "kgo.OnBrokerRead", err)
 	}
 }
 
 func (m *hookEvent) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
-	if err != nil {
-		// m.connected.Store(0)
+	switch {
+	case err == nil || isContextError(err) || kgo.IsRetryableBrokerErr(err):
+		return
+	default:
 		m.log.Error(context.TODO(), "kgo.OnProduceRecordUnbuffered", err)
 	}
 }
