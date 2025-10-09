@@ -15,7 +15,7 @@ var (
 	DefaultCommitInterval = 5 * time.Second
 
 	// DefaultStatsInterval specifies how fast check consumer lag
-	DefaultStatsInterval = 5 * time.Second
+	DefaultStatsInterval = 30 * time.Second
 
 	// DefaultSubscribeMaxInflight specifies how much messages keep inflight
 	DefaultSubscribeMaxInflight = 100
@@ -119,4 +119,11 @@ func PublishPromise(fn func(*kgo.Record, error)) broker.PublishOption {
 // ClientPublishKey set the kafka message key (client option)
 func ClientPublishPromise(fn func(*kgo.Record, error)) client.PublishOption {
 	return client.SetPublishOption(publishPromiseKey{}, fn)
+}
+
+type exposeLagKey struct{}
+
+// ExposeLag enabled subscriber lag via [meter.Meter]
+func ExposeLag(b bool) broker.Option {
+	return broker.SetOption(exposeLagKey{}, b)
 }
