@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.unistack.org/micro/v4/broker"
@@ -87,45 +86,12 @@ func (s *Subscriber) Unsubscribe(ctx context.Context) error {
 
 func (s *Subscriber) poll(ctx context.Context) {
 	maxInflight := DefaultSubscribeMaxInflight
+
 	if s.opts.Context != nil {
 		if n, ok := s.opts.Context.Value(subscribeMaxInflightKey{}).(int); n > 0 && ok {
 			maxInflight = n
 		}
 	}
-
-	go func() {
-		ac := kadm.NewClient(s.c)
-		ticker := time.NewTicker(DefaultStatsInterval)
-
-		for {
-			select {
-			case <-ctx.Done():
-				ticker.Stop()
-				return
-			case <-ticker.C:
-				dgls, err := ac.Lag(ctx, s.opts.Group)
-				if err != nil || !dgls.Ok() {
-					continue
-				}
-
-				dgl, ok := dgls[s.opts.Group]
-				if !ok {
-					continue
-				}
-				lmap, ok := dgl.Lag[s.topic]
-				if !ok {
-					continue
-				}
-
-				s.mu.Lock()
-				for p, l := range lmap {
-					s.kopts.Meter.Counter(semconv.BrokerGroupLag, "topic", s.topic, "group", s.opts.Group, "partition", strconv.Itoa(int(p))).Set(uint64(l.Lag))
-				}
-				s.mu.Unlock()
-
-			}
-		}
-	}()
 
 	for {
 		select {
@@ -141,7 +107,11 @@ func (s *Subscriber) poll(ctx context.Context) {
 				return
 			}
 			fetches.EachError(func(t string, p int32, err error) {
-				s.kopts.Logger.Fatal(ctx, fmt.Sprintf("[kgo] fetch topic %s partition %d error", t, p), err)
+				if kgo.IsRetryableBrokerErr(err) {
+					s.kopts.Logger.Error(ctx, fmt.Sprintf("[kgo] fetch topic %s partition %d error", t, p), err)
+				} else {
+					s.kopts.Logger.Fatal(ctx, fmt.Sprintf("[kgo] fetch topic %s partition %d error", t, p), err)
+				}
 			})
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
