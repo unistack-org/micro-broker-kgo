@@ -32,27 +32,27 @@ var (
 )
 
 const (
-	metricBrokerConnects    = "broker_connects_total"
-	metricBrokerDisconnects = "broker_disconnects_total"
+	metricBrokerConnects    = "micro_broker_connects_total"
+	metricBrokerDisconnects = "micro_broker_disconnects_total"
 
-	metricBrokerWriteErrors        = "broker_write_errors_total"
-	metricBrokerWriteBytes         = "broker_write_bytes_total"
-	metricBrokerWriteWaitLatencies = "broker_write_wait_latencies"
-	metricBrokerWriteLatencies     = "broker_write_latencies"
+	metricBrokerWriteErrors        = "micro_broker_write_errors_total"
+	metricBrokerWriteBytes         = "micro_broker_write_bytes_total"
+	metricBrokerWriteWaitLatencies = "micro_broker_write_wait_latencies"
+	metricBrokerWriteLatencies     = "micro_broker_write_latencies"
 
-	metricBrokerReadErrors        = "broker_read_errors_total"
-	metricBrokerReadBytes         = "broker_read_bytes_total"
-	metricBrokerReadWaitLatencies = "broker_read_wait_latencies"
-	metricBrokerReadLatencies     = "broker_read_latencies"
+	metricBrokerReadErrors        = "micro_broker_read_errors_total"
+	metricBrokerReadBytes         = "micro_broker_read_bytes_total"
+	metricBrokerReadWaitLatencies = "micro_broker_read_wait_latencies"
+	metricBrokerReadLatencies     = "micro_broker_read_latencies"
 
-	metricBrokerThrottleLatencies = "broker_throttle_latencies"
+	metricBrokerThrottleLatencies = "micro_broker_throttle_latencies"
 
-	metricBrokerProduceBytesCompressed   = "broker_produce_bytes_compressed_total"
-	metricBrokerProduceBytesUncompressed = "broker_produce_bytes_uncompressed_total"
-	metricBrokerFetchBytesCompressed     = "broker_consume_bytes_compressed_total"
-	metricBrokerFetchBytesUncompressed   = "broker_consume_bytes_uncompressed_total"
+	metricBrokerProduceBytesCompressed   = "micro_broker_produce_bytes_compressed_total"
+	metricBrokerProduceBytesUncompressed = "micro_broker_produce_bytes_uncompressed_total"
+	metricBrokerFetchBytesCompressed     = "micro_broker_consume_bytes_compressed_total"
+	metricBrokerFetchBytesUncompressed   = "micro_broker_consume_bytes_uncompressed_total"
 
-	metricBrokerGroupErrors = "broker_group_errors_total"
+	metricBrokerGroupErrors = "micro_broker_group_errors_total"
 
 	labelNode    = "node_id"
 	labelSuccess = "success"
