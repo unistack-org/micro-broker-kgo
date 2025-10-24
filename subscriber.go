@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -238,6 +239,11 @@ func (pc *consumer) consume() {
 				for _, hdr := range record.Headers {
 					p.msg.Header.Set(hdr.Key, string(hdr.Value))
 				}
+				p.msg.Header.Set("Micro-Offset", strconv.FormatInt(record.Offset, 10))
+				p.msg.Header.Set("Micro-Partition", strconv.FormatInt(int64(record.Partition), 10))
+				p.msg.Header.Set("Micro-Topic", record.Topic)
+				p.msg.Header.Set("Micro-Key", string(record.Key))
+				p.msg.Header.Set("Micro-Timestamp", strconv.FormatInt(record.Timestamp.Unix(), 10))
 				if pc.kopts.Codec.String() == "noop" {
 					p.msg.Body = record.Value
 				} else if pc.opts.BodyOnly {
