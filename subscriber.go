@@ -199,7 +199,15 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 	}
 	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
-		s.kopts.Logger.Error(ctx, "[kgo] revoked CommitMarkedOffsets error", err)
+		s.mu.Lock()
+		tpc := make(map[tp]*consumer, len(s.consumers))
+		maps.Copy(tpc, s.consumers)
+		s.mu.Unlock()
+		for tp, c := range tpc {
+			if c != nil {
+				c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+			}
+		}
 	}
 }
 
