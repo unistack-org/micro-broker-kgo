@@ -352,6 +352,8 @@ func (pc *consumer) newErrorMessage(err error, t string, p int32) *kgoMessage {
 		pm = &kgoMessage{}
 	}
 
+	pm.ack = false
+	pm.body = nil
 	pm.err = err
 	pm.topic = t
 	pm.hdr = metadata.New(2)
