@@ -123,7 +123,7 @@ func (s *Subscriber) poll(ctx context.Context) {
 				c := s.consumers[tps]
 				s.mu.Unlock()
 				if c != nil {
-					c.recs <- newErrorFetchTopicPartition(kgo.ErrClientClosed, t, p)
+					c.recs <- newErrorFetchTopicPartition(err, t, p)
 				}
 			})
 
