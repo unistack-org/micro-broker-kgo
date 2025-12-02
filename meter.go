@@ -14,18 +14,18 @@ type hookMeter struct {
 }
 
 var (
-	_ kgo.HookBrokerConnect    = &hookMeter{}
-	_ kgo.HookBrokerDisconnect = &hookMeter{}
+	_ kgo.HookBrokerConnect    = (*hookMeter)(nil)
+	_ kgo.HookBrokerDisconnect = (*hookMeter)(nil)
 	// HookBrokerE2E
-	_ kgo.HookBrokerRead     = &hookMeter{}
-	_ kgo.HookBrokerThrottle = &hookMeter{}
-	_ kgo.HookBrokerWrite    = &hookMeter{}
-	_ kgo.HookFetchBatchRead = &hookMeter{}
+	_ kgo.HookBrokerRead     = (*hookMeter)(nil)
+	_ kgo.HookBrokerThrottle = (*hookMeter)(nil)
+	_ kgo.HookBrokerWrite    = (*hookMeter)(nil)
+	_ kgo.HookFetchBatchRead = (*hookMeter)(nil)
 	// HookFetchRecordBuffered
 	// HookFetchRecordUnbuffered
-	_ kgo.HookGroupManageError = &hookMeter{}
+	_ kgo.HookGroupManageError = (*hookMeter)(nil)
 	// HookNewClient
-	_ kgo.HookProduceBatchWritten = &hookMeter{}
+	_ kgo.HookProduceBatchWritten = (*hookMeter)(nil)
 	// HookProduceRecordBuffered
 	// HookProduceRecordPartitioned
 	// HookProduceRecordUnbuffered

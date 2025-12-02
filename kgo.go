@@ -489,6 +489,7 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		kgo.OnPartitionsLost(sub.lost),
 		kgo.AutoCommitCallback(sub.autocommit),
 		kgo.AutoCommitMarks(),
+		kgo.WithHooks(sub),
 	)
 
 	if options.Context != nil {

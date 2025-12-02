@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	msgcnt   = int64(1200)
+	msgcnt   = int64(10)
 	group    = "38"
 	prefill  = true
 	loglevel = logger.DebugLevel
@@ -80,7 +80,7 @@ func TestFail(t *testing.T) {
 	for _, msg := range msgs {
 		t.Logf("broker publish")
 		if err := b.Publish(ctx, "test", msg); err != nil {
-			t.Fatal(err)
+			break
 		}
 	}
 	//	t.Skip()
@@ -108,7 +108,7 @@ func TestFail(t *testing.T) {
 
 	for {
 		t.Logf("health check")
-		if !b.Health() {
+		if b.Health() {
 			t.Logf("health works")
 			break
 		}

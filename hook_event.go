@@ -17,12 +17,12 @@ type hookEvent struct {
 }
 
 var (
-	_ kgo.HookBrokerConnect           = &hookEvent{}
-	_ kgo.HookBrokerDisconnect        = &hookEvent{}
-	_ kgo.HookBrokerRead              = &hookEvent{}
-	_ kgo.HookBrokerWrite             = &hookEvent{}
-	_ kgo.HookGroupManageError        = &hookEvent{}
-	_ kgo.HookProduceRecordUnbuffered = &hookEvent{}
+	_ kgo.HookBrokerConnect           = (*hookEvent)(nil)
+	_ kgo.HookBrokerDisconnect        = (*hookEvent)(nil)
+	_ kgo.HookBrokerRead              = (*hookEvent)(nil)
+	_ kgo.HookBrokerWrite             = (*hookEvent)(nil)
+	_ kgo.HookGroupManageError        = (*hookEvent)(nil)
+	_ kgo.HookProduceRecordUnbuffered = (*hookEvent)(nil)
 )
 
 func (m *hookEvent) OnGroupManageError(err error) {
