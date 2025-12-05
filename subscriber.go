@@ -121,7 +121,7 @@ func (s *Subscriber) poll(ctx context.Context) {
 				tps := tp{t, p}
 				s.mu.Lock()
 				c := s.consumers[tps]
-				s.mu.Unlock()
+				s.mu.RUnlock()
 				if c != nil {
 					c.recs <- newErrorFetchTopicPartition(err, t, p)
 				}
