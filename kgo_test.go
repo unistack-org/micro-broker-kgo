@@ -239,6 +239,8 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	bLogger := broker.Logger(logger.DefaultLogger.Clone(logger.WithLevel(logger.DebugLevel)))
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -246,6 +248,7 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 		broker.ContentType("application/octet-stream"),
 		broker.Codec("application/octet-stream", codec.NewCodec()),
 		broker.Addrs(cluster.ListenAddrs()...),
+		bLogger,
 		kgo.CommitInterval(500*time.Millisecond),
 		kgo.Options(
 			kg.ClientID("test-1"),
@@ -266,6 +269,7 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 		broker.ContentType("application/octet-stream"),
 		broker.Codec("application/octet-stream", codec.NewCodec()),
 		broker.Addrs(cluster.ListenAddrs()...),
+		bLogger,
 		kgo.CommitInterval(500*time.Millisecond),
 		kgo.Options(
 			kg.ClientID("test-2"),

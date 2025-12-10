@@ -79,8 +79,10 @@ func (s *Subscriber) Unsubscribe(ctx context.Context) error {
 		kc[ctp.t] = append(kc[ctp.t], ctp.p)
 	}
 	s.killConsumers(ctx, kc)
+	s.mu.Lock()
 	close(s.done)
 	s.closed = true
+	s.mu.Unlock()
 	s.c.ResumeFetchTopics(s.topic)
 
 	return nil
