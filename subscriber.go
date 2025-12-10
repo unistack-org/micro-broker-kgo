@@ -119,7 +119,7 @@ func (s *Subscriber) poll(ctx context.Context) {
 			}
 			fetches.EachError(func(t string, p int32, err error) {
 				tps := tp{t, p}
-				s.mu.Lock()
+				s.mu.RLock()
 				c := s.consumers[tps]
 				s.mu.RUnlock()
 				if c != nil {
