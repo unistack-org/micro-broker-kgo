@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
 	kg "github.com/twmb/franz-go/pkg/kgo"
@@ -19,7 +20,9 @@ import (
 	"go.unistack.org/micro/v3"
 	"go.unistack.org/micro/v3/broker"
 	"go.unistack.org/micro/v3/client"
+	"go.unistack.org/micro/v3/codec"
 	"go.unistack.org/micro/v3/logger"
+	"go.unistack.org/micro/v3/logger/slog"
 	"go.unistack.org/micro/v3/metadata"
 	"go.unistack.org/micro/v3/server"
 )
@@ -256,4 +259,125 @@ func TestPubSub(t *testing.T) {
 		}
 	}()
 	<-done
+}
+
+func TestKillConsumers_E2E_Rebalance(t *testing.T) {
+	logger.DefaultLogger = slog.NewLogger()
+	if err := logger.DefaultLogger.Init(logger.WithLevel(logger.DebugLevel)); err != nil {
+		t.Fatal(err)
+	}
+	bLogger := broker.Logger(logger.DefaultLogger.Clone(logger.WithLevel(logger.InfoLevel)))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	b1 := kgo.NewBroker(
+		broker.Codec(codec.NewCodec()),
+		broker.Addrs(cluster.ListenAddrs()...),
+		bLogger,
+		kgo.CommitInterval(500*time.Millisecond),
+		kgo.Options(
+			kg.ClientID("test-rebalance-1"),
+			kg.FetchMaxBytes(10*1024*1024),
+			kg.AllowAutoTopicCreation(),
+			kg.MaxBufferedRecords(10),
+		),
+	)
+	require.Nil(t, b1.Init())
+	require.Nil(t, b1.Connect(ctx))
+	defer func() { _ = b1.Disconnect(context.Background()) }()
+
+	b2 := kgo.NewBroker(
+		broker.Codec(codec.NewCodec()),
+		broker.Addrs(cluster.ListenAddrs()...),
+		bLogger,
+		kgo.CommitInterval(500*time.Millisecond),
+		kgo.Options(
+			kg.ClientID("test-rebalance-2"),
+			kg.FetchMaxBytes(10*1024*1024),
+			kg.AllowAutoTopicCreation(),
+			kg.MaxBufferedRecords(10),
+		),
+	)
+	require.Nil(t, b2.Init())
+	require.Nil(t, b2.Connect(ctx))
+	defer func() { _ = b2.Disconnect(context.Background()) }()
+
+	topic := fmt.Sprintf("test.rebalance.%d", time.Now().UnixNano())
+	const total = int64(1000)
+	var (
+		processed  int64
+		c1Count    int64
+		c2Count    int64
+		done       = make(chan struct{})
+		deltaBatch = int64(100)
+	)
+
+	go func() {
+		for atomic.LoadInt64(&processed) < total {
+			msgs := make([]*broker.Message, 0, deltaBatch)
+			for i := int64(0); i < deltaBatch; i++ {
+				msgs = append(msgs, &broker.Message{
+					Header: map[string]string{metadata.HeaderTopic: topic},
+				})
+			}
+			_ = b1.BatchPublish(ctx, msgs, broker.PublishBodyOnly(true))
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	f := func(processed, counter *int64) func(event broker.Event) error {
+		return func(event broker.Event) error {
+			time.Sleep(10 * time.Millisecond)
+			atomic.AddInt64(processed, 1)
+			atomic.AddInt64(counter, 1)
+			if atomic.LoadInt64(processed) >= total {
+				select {
+				case <-done:
+				default:
+					close(done)
+				}
+			}
+			return event.Ack()
+		}
+	}
+	h1 := f(&processed, &c1Count)
+	h2 := f(&processed, &c2Count)
+
+	sub1, err := b1.Subscribe(ctx, topic, h1,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test"),
+		broker.SubscribeBodyOnly(true),
+	)
+	require.Nil(t, err)
+	defer func() { require.Nil(t, sub1.Unsubscribe(context.Background())) }()
+
+	time.Sleep(500 * time.Millisecond)
+	// второй consumer подключается -> KAFKA REBALANCE
+	sub2, err := b2.Subscribe(ctx, topic, h2,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test"),
+		broker.SubscribeBodyOnly(true),
+	)
+	require.Nil(t, err)
+	defer func() { require.Nil(t, sub2.Unsubscribe(context.Background())) }()
+
+	// ждём окончания
+	select {
+	case <-done:
+		t.Log("DONE")
+	case <-ctx.Done():
+		cancel()
+		t.Fatalf("timeout: processed=%d of %d (c1=%d, c2=%d)",
+			atomic.LoadInt64(&processed),
+			total,
+			atomic.LoadInt64(&c1Count),
+			atomic.LoadInt64(&c2Count),
+		)
+	}
+
+	assert.Equal(t, total, atomic.LoadInt64(&processed))
+	assert.NotEqual(t, int64(0), atomic.LoadInt64(&c1Count))
+	assert.NotEqual(t, int64(0), atomic.LoadInt64(&c2Count))
+
+	assert.Equal(t, total, atomic.LoadInt64(&c1Count)+atomic.LoadInt64(&c2Count))
 }
