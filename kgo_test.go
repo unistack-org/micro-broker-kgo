@@ -2,6 +2,8 @@ package kgo_test
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -11,9 +13,15 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	kg "github.com/twmb/franz-go/pkg/kgo"
 	kgo "go.unistack.org/micro-broker-kgo/v3"
+	jsonpb "go.unistack.org/micro-codec-jsonpb/v3"
+	proto "go.unistack.org/micro-codec-proto/v3"
+	requestid "go.unistack.org/micro-wrapper-requestid/v3"
+	"go.unistack.org/micro/v3"
 	"go.unistack.org/micro/v3/broker"
+	"go.unistack.org/micro/v3/client"
 	"go.unistack.org/micro/v3/logger"
 	"go.unistack.org/micro/v3/metadata"
+	"go.unistack.org/micro/v3/server"
 )
 
 var (
@@ -32,16 +40,84 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func helperCreateBroker() *kgo.Broker {
+func helperCreateBroker(t *testing.T) *kgo.Broker {
+	t.Helper()
 	b := kgo.NewBroker(
 		broker.Addrs(cluster.ListenAddrs()...),
 		kgo.CommitInterval(5*time.Second),
 		kgo.Options(kg.ClientID("test"), kg.FetchMaxBytes(10*1024*1024),
 			kg.AllowAutoTopicCreation(),
 		),
+		kgo.CommitInterval(1*time.Second),
+		broker.ErrorHandler(func(event broker.Event) error {
+			msg := event.Message()
+			log := logger.DefaultLogger.
+				Fields("topic", event.Topic(),
+					"header", msg.Header,
+					"body", msg.Body)
+			err := event.Ack()
+
+			if err != nil {
+				log.Fields("ack_error", err).Error(context.Background(), fmt.Sprintf("brokerHandlerErr: Ack error | %v", event.Error()))
+				return err
+			}
+
+			log.Error(context.Background(), fmt.Sprintf("brokerHandlerErr: %v", event.Error()))
+
+			return nil
+		}),
 	)
 
 	return b
+}
+
+func helperCreateService(t *testing.T, ctx context.Context, b *kgo.Broker) micro.Service {
+	t.Helper()
+
+	rh := requestid.NewHook()
+
+	sopts := []server.Option{
+		server.Name("test"),
+		server.Version("latest"),
+		server.Context(ctx),
+		server.Codec("application/json", jsonpb.NewCodec()),
+		server.Codec("application/protobuf", proto.NewCodec()),
+		server.Codec("application/grpc", proto.NewCodec()),
+		server.Codec("application/grpc+proto", proto.NewCodec()),
+		server.Codec("application/grpc+json", jsonpb.NewCodec()),
+		server.Broker(b),
+		server.Hooks(
+			server.HookHandler(rh.ServerHandler),
+			server.HookSubHandler(rh.ServerSubscriber),
+		),
+	}
+
+	copts := []client.Option{
+		client.Codec("application/json", jsonpb.NewCodec()),
+		client.Codec("application/protobuf", proto.NewCodec()),
+		client.Codec("application/grpc", proto.NewCodec()),
+		client.Codec("application/grpc+proto", proto.NewCodec()),
+		client.Codec("application/grpc+json", jsonpb.NewCodec()),
+		client.ContentType("application/grpc"),
+		client.Retries(0),
+		client.TLSConfig(&tls.Config{InsecureSkipVerify: true}),
+		client.Broker(b),
+		client.Hooks(
+			client.HookPublish(rh.ClientPublish),
+			client.HookCall(rh.ClientCall),
+			client.HookBatchPublish(rh.ClientBatchPublish),
+			client.HookStream(rh.ClientStream),
+		),
+	}
+
+	return micro.NewService(
+		micro.Server(server.NewServer(sopts...)),
+		micro.Client(client.NewClient(copts...)),
+		micro.Broker(b),
+		micro.Context(ctx),
+		micro.Name("test"),
+		micro.Version("latest"),
+	)
 }
 
 func TestFail(t *testing.T) {
@@ -49,7 +125,7 @@ func TestFail(t *testing.T) {
 	err := logger.DefaultLogger.Init(logger.WithLevel(loglevel))
 	require.Nil(t, err)
 
-	b := helperCreateBroker()
+	b := helperCreateBroker(t)
 
 	t.Logf("broker init")
 	require.Nil(t, b.Init())
@@ -109,7 +185,7 @@ func TestFail(t *testing.T) {
 
 func TestConnect(t *testing.T) {
 	ctx := context.TODO()
-	b := helperCreateBroker()
+	b := helperCreateBroker(t)
 
 	require.Nil(t, b.Init())
 
@@ -121,7 +197,7 @@ func TestPubSub(t *testing.T) {
 	err := logger.DefaultLogger.Init(logger.WithLevel(loglevel))
 	require.Nil(t, err)
 
-	b := helperCreateBroker()
+	b := helperCreateBroker(t)
 
 	require.Nil(t, b.Init())
 	require.Nil(t, b.Connect(ctx))

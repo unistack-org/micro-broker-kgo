@@ -139,7 +139,11 @@ func (s *Subscriber) poll(ctx context.Context) {
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 				tps := tp{p.Topic, p.Partition}
-				s.consumers[tps].recs <- p
+				s.mu.Lock()
+				if c := s.consumers[tps]; c != nil {
+					c.recs <- p
+				}
+				s.mu.Unlock()
 			})
 			s.c.AllowRebalance()
 		}
@@ -157,6 +161,7 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 			pc, ok := s.consumers[tps]
 			if ok {
 				delete(s.consumers, tps)
+				close(pc.quit)
 			}
 			s.mu.Unlock()
 			if !ok || pc == nil {
@@ -166,8 +171,6 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 			if s.kopts.Logger.V(logger.DebugLevel) {
 				s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] killing consumer topic %s partition %d", topic, partition))
 			}
-
-			close(pc.quit)
 
 			wg.Add(1)
 			go func(c *consumer, t string, p int32) {
