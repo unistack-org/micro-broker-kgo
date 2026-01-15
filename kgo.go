@@ -30,7 +30,6 @@ var _ broker.Broker = (*Broker)(nil)
 var ErrLostMessage = errors.New("message not marked for offsets commit and will be lost in next iteration")
 
 var DefaultRetryBackoffFn = func() func(int) time.Duration {
-	var rngMu sync.Mutex
 	return func(fails int) time.Duration {
 		const (
 			min = 100 * time.Millisecond
@@ -45,9 +44,7 @@ var DefaultRetryBackoffFn = func() func(int) time.Duration {
 
 		backoff := min * time.Duration(1<<(fails-1))
 
-		rngMu.Lock()
 		jitter := 0.8 + 0.4*rand.Float64()
-		rngMu.Unlock()
 
 		backoff = time.Duration(float64(backoff) * jitter)
 
@@ -73,31 +70,31 @@ type Broker struct {
 	init bool
 }
 
-func (r *Broker) Live() bool {
-	return r.connected.Load() == 1
+func (b *Broker) Live() bool {
+	return b.connected.Load() == 1
 }
 
-func (r *Broker) Ready() bool {
-	return r.connected.Load() == 1
+func (b *Broker) Ready() bool {
+	return b.connected.Load() == 1
 }
 
-func (r *Broker) Health() bool {
-	return r.connected.Load() == 1
+func (b *Broker) Health() bool {
+	return b.connected.Load() == 1
 }
 
-func (k *Broker) Address() string {
-	return strings.Join(k.opts.Addrs, ",")
+func (b *Broker) Address() string {
+	return strings.Join(b.opts.Addrs, ",")
 }
 
-func (k *Broker) Name() string {
-	return k.opts.Name
+func (b *Broker) Name() string {
+	return b.opts.Name
 }
 
-func (k *Broker) Client() *kgo.Client {
-	return k.c
+func (b *Broker) Client() *kgo.Client {
+	return b.c
 }
 
-func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *hookTracer, error) {
+func (b *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *hookTracer, error) {
 	var c *kgo.Client
 	var err error
 
@@ -105,27 +102,27 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 
 	clientID := "kgo"
 	group := ""
-	if k.opts.Context != nil {
-		if id, ok := k.opts.Context.Value(clientIDKey{}).(string); ok {
+	if b.opts.Context != nil {
+		if id, ok := b.opts.Context.Value(clientIDKey{}).(string); ok {
 			clientID = id
 		}
-		if id, ok := k.opts.Context.Value(groupKey{}).(string); ok {
+		if id, ok := b.opts.Context.Value(groupKey{}).(string); ok {
 			group = id
 		}
 	}
 
 	var fatalOnError bool
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
 			fatalOnError = v
 		}
 	}
 
-	htracer := &hookTracer{group: group, clientID: clientID, tracer: k.opts.Tracer}
+	htracer := &hookTracer{group: group, clientID: clientID, tracer: b.opts.Tracer}
 	opts = append(opts,
-		kgo.WithHooks(&hookMeter{meter: k.opts.Meter}),
+		kgo.WithHooks(&hookMeter{meter: b.opts.Meter}),
 		kgo.WithHooks(htracer),
-		kgo.WithHooks(&hookEvent{log: k.opts.Logger, fatalOnError: fatalOnError, connected: k.connected}),
+		kgo.WithHooks(&hookEvent{log: b.opts.Logger, fatalOnError: fatalOnError, connected: b.connected}),
 	)
 
 	select {
@@ -147,7 +144,7 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 			}
 			return nil, nil, err
 		}
-		k.connected.Store(1)
+		b.connected.Store(1)
 
 		if fatalOnError {
 			go func() {
@@ -156,9 +153,9 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 				tc := mjitter.NewTicker(500*time.Millisecond, 1*time.Second)
 				defer tc.Stop()
 				for range tc.C {
-					if k.connected.Load() == 0 {
+					if b.connected.Load() == 0 {
 						if n > c {
-							k.opts.Logger.Fatal(context.Background(), "broker fatal error")
+							b.opts.Logger.Fatal(context.Background(), "broker fatal error")
 						}
 						n++
 					} else {
@@ -171,29 +168,29 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 	}
 }
 
-func (k *Broker) Connect(ctx context.Context) error {
-	if k.connected.Load() == 1 {
+func (b *Broker) Connect(ctx context.Context) error {
+	if b.connected.Load() == 1 {
 		return nil
 	}
 
-	nctx := k.opts.Context
+	nctx := b.opts.Context
 	if ctx != nil {
 		nctx = ctx
 	}
 
-	c, _, err := k.connect(nctx, k.kopts...)
+	c, _, err := b.connect(nctx, b.kopts...)
 	if err != nil {
 		return err
 	}
 
-	k.mu.Lock()
-	k.c = c
-	k.connected.Store(1)
-	k.mu.Unlock()
+	b.mu.Lock()
+	b.c = c
+	b.connected.Store(1)
+	b.mu.Unlock()
 
 	exposeLag := false
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(exposeLagKey{}).(bool); ok && v {
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(exposeLagKey{}).(bool); ok && v {
 			exposeLag = v
 		}
 	}
@@ -207,25 +204,26 @@ func (k *Broker) Connect(ctx context.Context) error {
 		}
 
 		lag := make(map[string]map[string]pl) // topic => group => partition => lag
-		ac := kadm.NewClient(k.c)
+		ac := kadm.NewClient(b.c)
 
 		updateStats := func() {
 			mu.Lock()
 			if time.Since(lastUpdate) < DefaultStatsInterval {
+				mu.Unlock()
 				return
 			}
 			mu.Unlock()
 
-			k.mu.Lock()
-			groups := make([]string, 0, len(k.subs))
-			for _, g := range k.subs {
+			b.mu.Lock()
+			groups := make([]string, 0, len(b.subs))
+			for _, g := range b.subs {
 				groups = append(groups, g.opts.Group)
 			}
-			k.mu.Unlock()
+			b.mu.Unlock()
 
 			dgls, err := ac.Lag(ctx, groups...)
 			if err != nil || !dgls.Ok() {
-				k.opts.Logger.Error(k.opts.Context, "kgo describe group lag error", err)
+				b.opts.Logger.Error(b.opts.Context, "kgo describe group lag error", err)
 				return
 			}
 
@@ -243,7 +241,7 @@ func (k *Broker) Connect(ctx context.Context) error {
 
 		for tn, dg := range lag {
 			for gn, gl := range dg {
-				k.opts.Meter.Gauge(semconv.BrokerGroupLag,
+				b.opts.Meter.Gauge(semconv.BrokerGroupLag,
 					func() float64 { updateStats(); return gl.l },
 					"topic", tn,
 					"group", gn,
@@ -256,94 +254,94 @@ func (k *Broker) Connect(ctx context.Context) error {
 	return nil
 }
 
-func (k *Broker) Disconnect(ctx context.Context) error {
-	if k.connected.Load() == 0 {
+func (b *Broker) Disconnect(ctx context.Context) error {
+	if b.connected.Load() == 0 {
 		return nil
 	}
 
-	nctx := k.opts.Context
+	nctx := b.opts.Context
 	if ctx != nil {
 		nctx = ctx
 	}
 	var span tracer.Span
-	ctx, span = k.opts.Tracer.Start(ctx, "Disconnect")
+	ctx, span = b.opts.Tracer.Start(ctx, "Disconnect")
 	defer span.Finish()
 
-	k.mu.Lock()
-	defer k.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	select {
 	case <-nctx.Done():
 		return nctx.Err()
 	default:
-		for _, sub := range k.subs {
-			if sub.closed {
+		for _, sub := range b.subs {
+			if sub.closed.Load() {
 				continue
 			}
 			if err := sub.Unsubscribe(ctx); err != nil {
 				return err
 			}
 		}
-		if k.c != nil {
-			k.c.CloseAllowingRebalance()
-			// k.c.Close()
+		if b.c != nil {
+			b.c.CloseAllowingRebalance()
+			// b.c.Close()
 		}
 	}
 
-	k.connected.Store(0)
-	close(k.done)
+	b.connected.Store(0)
+	close(b.done)
 	return nil
 }
 
-func (k *Broker) Init(opts ...broker.Option) error {
-	k.mu.Lock()
-	defer k.mu.Unlock()
+func (b *Broker) Init(opts ...broker.Option) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	if len(opts) == 0 && k.init {
+	if len(opts) == 0 && b.init {
 		return nil
 	}
 
 	for _, o := range opts {
-		o(&k.opts)
+		o(&b.opts)
 	}
 
-	if err := k.opts.Register.Init(); err != nil {
+	if err := b.opts.Register.Init(); err != nil {
 		return err
 	}
-	if err := k.opts.Tracer.Init(); err != nil {
+	if err := b.opts.Tracer.Init(); err != nil {
 		return err
 	}
-	if err := k.opts.Logger.Init(); err != nil {
+	if err := b.opts.Logger.Init(); err != nil {
 		return err
 	}
-	if err := k.opts.Meter.Init(); err != nil {
+	if err := b.opts.Meter.Init(); err != nil {
 		return err
 	}
 
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(optionsKey{}).([]kgo.Opt); ok && len(v) > 0 {
-			k.kopts = append(k.kopts, v...)
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(optionsKey{}).([]kgo.Opt); ok && len(v) > 0 {
+			b.kopts = append(b.kopts, v...)
 		}
 	}
 
-	k.init = true
+	b.init = true
 
 	return nil
 }
 
-func (k *Broker) Options() broker.Options {
-	return k.opts
+func (b *Broker) Options() broker.Options {
+	return b.opts
 }
 
-func (k *Broker) BatchPublish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
-	return k.publish(ctx, msgs, opts...)
+func (b *Broker) BatchPublish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
+	return b.publish(ctx, msgs, opts...)
 }
 
-func (k *Broker) Publish(ctx context.Context, topic string, msg *broker.Message, opts ...broker.PublishOption) error {
+func (b *Broker) Publish(ctx context.Context, topic string, msg *broker.Message, opts ...broker.PublishOption) error {
 	msg.Header.Set(metadata.HeaderTopic, topic)
-	return k.publish(ctx, []*broker.Message{msg}, opts...)
+	return b.publish(ctx, []*broker.Message{msg}, opts...)
 }
 
-func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
+func (b *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
 	options := broker.NewPublishOptions(opts...)
 	records := make([]*kgo.Record, 0, len(msgs))
 	var errs []string
@@ -366,12 +364,12 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
 		msg.Header.Del(metadata.HeaderTopic)
 
-		k.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", rec.Topic, "topic", rec.Topic).Inc()
-		if options.BodyOnly || k.opts.Codec.String() == "noop" {
+		b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", rec.Topic, "topic", rec.Topic).Inc()
+		if options.BodyOnly || b.opts.Codec.String() == "noop" {
 			rec.Value = msg.Body
 			setHeaders(rec, msg.Header)
 		} else {
-			rec.Value, err = k.opts.Codec.Marshal(msg)
+			rec.Value, err = b.opts.Codec.Marshal(msg)
 			if err != nil {
 				return err
 			}
@@ -382,15 +380,15 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 	if promise != nil {
 		ts := time.Now()
 		for _, rec := range records {
-			k.c.Produce(ctx, rec, func(r *kgo.Record, err error) {
+			b.c.Produce(ctx, rec, func(r *kgo.Record, err error) {
 				te := time.Since(ts)
-				k.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", rec.Topic, "topic", rec.Topic).Dec()
-				k.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
-				k.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
+				b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", rec.Topic, "topic", rec.Topic).Dec()
+				b.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
+				b.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
 				if err != nil {
-					k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "failure").Inc()
+					b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "failure").Inc()
 				} else {
-					k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "success").Inc()
+					b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "success").Inc()
 				}
 				promise(r, err)
 			})
@@ -399,18 +397,18 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 	}
 	ts := time.Now()
 
-	results := k.c.ProduceSync(ctx, records...)
+	results := b.c.ProduceSync(ctx, records...)
 
 	te := time.Since(ts)
 	for _, result := range results {
-		k.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
-		k.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
-		k.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Dec()
+		b.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
+		b.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
+		b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Dec()
 		if result.Err != nil {
-			k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "failure").Inc()
+			b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "failure").Inc()
 			errs = append(errs, result.Err.Error())
 		} else {
-			k.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "success").Inc()
+			b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "success").Inc()
 		}
 	}
 
@@ -421,27 +419,31 @@ func (k *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 	return nil
 }
 
-func (k *Broker) TopicExists(ctx context.Context, topic string) error {
+func (b *Broker) TopicExists(ctx context.Context, topic string) error {
 	mdreq := kmsg.NewMetadataRequest()
 	mdreq.Topics = []kmsg.MetadataRequestTopic{
 		{Topic: &topic},
 	}
 
-	mdrsp, err := mdreq.RequestWith(ctx, k.c)
+	mdrsp, err := mdreq.RequestWith(ctx, b.c)
 	if err != nil {
 		return err
-	} else if mdrsp.Topics[0].ErrorCode != 0 {
+	}
+	if len(mdrsp.Topics) == 0 {
+		return fmt.Errorf("topic %s: empty response", topic)
+	}
+	if mdrsp.Topics[0].ErrorCode != 0 {
 		return fmt.Errorf("topic %s not exists or permission error", topic)
 	}
 
 	return nil
 }
 
-func (k *Broker) BatchSubscribe(_ context.Context, _ string, _ broker.BatchHandler, _ ...broker.SubscribeOption) (broker.Subscriber, error) {
+func (b *Broker) BatchSubscribe(_ context.Context, _ string, _ broker.BatchHandler, _ ...broker.SubscribeOption) (broker.Subscriber, error) {
 	return nil, nil
 }
 
-func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
+func (b *Broker) Subscribe(ctx context.Context, topic string, handler broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
 	options := broker.NewSubscribeOptions(opts...)
 
 	if options.Group == "" {
@@ -453,15 +455,15 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 	}
 
 	commitInterval := DefaultCommitInterval
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(commitIntervalKey{}).(time.Duration); ok && v > 0 {
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(commitIntervalKey{}).(time.Duration); ok && v > 0 {
 			commitInterval = v
 		}
 	}
 
 	var fatalOnError bool
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
 			fatalOnError = v
 		}
 	}
@@ -470,14 +472,14 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		topic:        topic,
 		opts:         options,
 		handler:      handler,
-		kopts:        k.opts,
-		consumers:    make(map[tp]*consumer),
+		kopts:        b.opts,
 		done:         make(chan struct{}),
 		fatalOnError: fatalOnError,
-		connected:    k.connected,
+		connected:    b.connected,
 	}
+	sub.initConsumers()
 
-	kopts := append(k.kopts,
+	kopts := append(b.kopts,
 		kgo.ConsumerGroup(options.Group),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -498,7 +500,7 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		}
 	}
 
-	c, htracer, err := k.connect(ctx, kopts...)
+	c, htracer, err := b.connect(ctx, kopts...)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +513,7 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 	mdrsp, err := mdreq.RequestWith(ctx, c)
 	if err != nil {
 		return nil, err
-	} else if mdrsp.Topics[0].ErrorCode != 0 {
+	} else if len(mdrsp.Topics) == 0 || mdrsp.Topics[0].ErrorCode != 0 {
 		return nil, fmt.Errorf("topic %s not exists or permission error", topic)
 	}
 
@@ -520,13 +522,22 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 
 	go sub.poll(ctx)
 
-	k.mu.Lock()
-	k.subs = append(k.subs, sub)
-	k.mu.Unlock()
+	b.mu.Lock()
+	// Cleanup closed subscribers to prevent memory leak
+	n := 0
+	for _, s := range b.subs {
+		if !s.closed.Load() {
+			b.subs[n] = s
+			n++
+		}
+	}
+	b.subs = b.subs[:n]
+	b.subs = append(b.subs, sub)
+	b.mu.Unlock()
 	return sub, nil
 }
 
-func (k *Broker) String() string {
+func (b *Broker) String() string {
 	return "kgo"
 }
 
