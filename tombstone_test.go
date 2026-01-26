@@ -19,10 +19,10 @@ func TestSubscriberHandlesTombstoneMessages(t *testing.T) {
 	err := logger.DefaultLogger.Init(logger.WithLevel(loglevel))
 	require.Nil(t, err)
 
-	cl := cluster
+	cl := defCluster
 	_ = cl
 
-	b := helperCreateBroker(t)
+	b := helperCreateBroker(t, defCluster)
 	require.Nil(t, b.Init())
 	require.Nil(t, b.Connect(ctx))
 	defer func() {
@@ -57,7 +57,7 @@ func TestSubscriberHandlesTombstoneMessages(t *testing.T) {
 
 	{ // PUBLISH tombstones via franz-go client
 		client, err := kg.NewClient(
-			kg.SeedBrokers(cluster.ListenAddrs()...),
+			kg.SeedBrokers(defCluster.ListenAddrs()...),
 			kg.AllowAutoTopicCreation(),
 		)
 		require.Nil(t, err)

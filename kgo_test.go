@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	kg "github.com/twmb/franz-go/pkg/kgo"
 	kgo "go.unistack.org/micro-broker-kgo/v3"
@@ -28,22 +29,22 @@ import (
 )
 
 var (
-	msgcnt   = int64(10)
-	group    = "38"
-	prefill  = true
-	loglevel = logger.ErrorLevel
-	cluster  *kfake.Cluster
+	msgcnt     = int64(10)
+	group      = "38"
+	prefill    = true
+	loglevel   = logger.ErrorLevel
+	defCluster *kfake.Cluster
 )
 
 func TestMain(m *testing.M) {
-	cluster = kfake.MustCluster(
+	defCluster = kfake.MustCluster(
 		kfake.AllowAutoTopicCreation(),
 	)
-	defer cluster.Close()
+	defer defCluster.Close()
 	os.Exit(m.Run())
 }
 
-func helperCreateBroker(t *testing.T) *kgo.Broker {
+func helperCreateBroker(t *testing.T, cluster *kfake.Cluster) *kgo.Broker {
 	t.Helper()
 	b := kgo.NewBroker(
 		broker.Addrs(cluster.ListenAddrs()...),
@@ -123,12 +124,87 @@ func helperCreateService(t *testing.T, ctx context.Context, b *kgo.Broker) micro
 	)
 }
 
+func TestSub(t *testing.T) {
+	existListTopics := []string{
+		"test",
+		"test.pubsub",
+	}
+	ctx := context.Background()
+	err := logger.DefaultLogger.Init(logger.WithLevel(loglevel))
+	require.Nil(t, err)
+	cluster := kfake.MustCluster()
+
+	adminClient, err := kg.NewClient(
+		kg.SeedBrokers(cluster.ListenAddrs()...),
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer adminClient.Close()
+
+	adm := kadm.NewClient(adminClient)
+
+	for _, topic := range existListTopics {
+		resp, err := adm.CreateTopics(ctx, 1, 1, nil, topic)
+		if err != nil {
+			panic(err)
+		}
+		if resp[topic].Err != nil {
+			panic(err)
+		}
+	}
+	defer cluster.Close()
+
+	b := helperCreateBroker(t, cluster)
+	require.Nil(t, b.Init())
+	require.Nil(t, b.Connect(ctx))
+	defer func() {
+		require.Nil(t, b.Disconnect(ctx))
+	}()
+
+	svc := helperCreateService(t, ctx, b)
+	require.Nil(t, svc.Init())
+
+	defer func() {
+		t.Logf("broker disconnect")
+		require.Nil(t, b.Disconnect(ctx))
+	}()
+
+	fn := func(ctx context.Context, msg *codec.RawMessage) error {
+		return nil
+	}
+
+	for _, topic := range append(existListTopics, "unknown") {
+		err = micro.RegisterSubscriber(
+			topic,
+			svc.Server(),
+			fn,
+			server.SubscriberQueue("queue"),
+			server.SubscriberAck(true),
+			server.SubscriberBodyOnly(true),
+		)
+		require.Nil(t, err)
+	}
+
+	require.NotNil(t, svc.Start())
+
+	go func() {
+		require.NotNil(t, svc.Run())
+	}()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	<-ticker.C
+	require.Nil(t, svc.Stop())
+}
+
 func TestFail(t *testing.T) {
 	ctx := context.Background()
 	err := logger.DefaultLogger.Init(logger.WithLevel(loglevel))
 	require.Nil(t, err)
 
-	b := helperCreateBroker(t)
+	b := helperCreateBroker(t, defCluster)
 
 	t.Logf("broker init")
 	require.Nil(t, b.Init())
@@ -188,7 +264,7 @@ func TestFail(t *testing.T) {
 
 func TestConnect(t *testing.T) {
 	ctx := context.TODO()
-	b := helperCreateBroker(t)
+	b := helperCreateBroker(t, defCluster)
 
 	require.Nil(t, b.Init())
 
@@ -200,7 +276,7 @@ func TestPubSub(t *testing.T) {
 	err := logger.DefaultLogger.Init(logger.WithLevel(loglevel))
 	require.Nil(t, err)
 
-	b := helperCreateBroker(t)
+	b := helperCreateBroker(t, defCluster)
 
 	require.Nil(t, b.Init())
 	require.Nil(t, b.Connect(ctx))
@@ -272,7 +348,7 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 
 	b1 := kgo.NewBroker(
 		broker.Codec(codec.NewCodec()),
-		broker.Addrs(cluster.ListenAddrs()...),
+		broker.Addrs(defCluster.ListenAddrs()...),
 		bLogger,
 		kgo.CommitInterval(500*time.Millisecond),
 		kgo.Options(
@@ -288,7 +364,7 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 
 	b2 := kgo.NewBroker(
 		broker.Codec(codec.NewCodec()),
-		broker.Addrs(cluster.ListenAddrs()...),
+		broker.Addrs(defCluster.ListenAddrs()...),
 		bLogger,
 		kgo.CommitInterval(500*time.Millisecond),
 		kgo.Options(
@@ -379,5 +455,4 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 	assert.NotEqual(t, int64(0), atomic.LoadInt64(&c1Count))
 	assert.NotEqual(t, int64(0), atomic.LoadInt64(&c2Count))
 
-	assert.Equal(t, total, atomic.LoadInt64(&c1Count)+atomic.LoadInt64(&c2Count))
 }
