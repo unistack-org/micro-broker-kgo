@@ -23,7 +23,7 @@ func Benchmark_PubSub(b *testing.B) {
 	for _, msgCount := range msgCounts {
 		b.Run(fmt.Sprintf("msgs=%d", msgCount), func(b *testing.B) {
 			brk := kgo.NewBroker(
-				broker.Addrs(cluster.ListenAddrs()...),
+				broker.Addrs(defCluster.ListenAddrs()...),
 				kgo.CommitInterval(1*time.Second),
 				kgo.Options(
 					kg.ClientID("bench"),
@@ -103,7 +103,7 @@ func Benchmark_PublishOnly(b *testing.B) {
 	_ = logger.DefaultLogger.Init(logger.WithLevel(logger.ErrorLevel))
 
 	brk := kgo.NewBroker(
-		broker.Addrs(cluster.ListenAddrs()...),
+		broker.Addrs(defCluster.ListenAddrs()...),
 		kgo.CommitInterval(1*time.Second),
 		kgo.Options(
 			kg.ClientID("bench-pub"),
@@ -142,7 +142,7 @@ func Benchmark_SubscribeHandler(b *testing.B) {
 	msgCount := 10000
 
 	brk := kgo.NewBroker(
-		broker.Addrs(cluster.ListenAddrs()...),
+		broker.Addrs(defCluster.ListenAddrs()...),
 		kgo.CommitInterval(1*time.Second),
 		kgo.Options(
 			kg.ClientID("bench-sub"),
