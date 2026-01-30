@@ -494,7 +494,7 @@ func (b *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 			kgo.AutoCommitMarks(),
 			kgo.WithHooks(sub),
 		},
-		k.kopts...,
+		b.kopts...,
 	)
 
 	if options.Context != nil {
