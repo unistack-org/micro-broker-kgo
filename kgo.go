@@ -477,19 +477,22 @@ func (k *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 		connected:    k.connected,
 	}
 
-	kopts := append(k.kopts,
-		kgo.ConsumerGroup(options.Group),
-		kgo.ConsumeTopics(topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(1*time.Second),
-		kgo.AutoCommitInterval(commitInterval),
-		kgo.OnPartitionsAssigned(sub.assigned),
-		kgo.OnPartitionsRevoked(sub.revoked),
-		kgo.StopProducerOnDataLossDetected(),
-		kgo.OnPartitionsLost(sub.lost),
-		kgo.AutoCommitCallback(sub.autocommit),
-		kgo.AutoCommitMarks(),
-		kgo.WithHooks(sub),
+	kopts := append(
+		[]kgo.Opt{
+			kgo.ConsumerGroup(options.Group),
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			kgo.FetchMaxWait(1 * time.Second),
+			kgo.AutoCommitInterval(commitInterval),
+			kgo.OnPartitionsAssigned(sub.assigned),
+			kgo.OnPartitionsRevoked(sub.revoked),
+			kgo.StopProducerOnDataLossDetected(),
+			kgo.OnPartitionsLost(sub.lost),
+			kgo.AutoCommitCallback(sub.autocommit),
+			kgo.AutoCommitMarks(),
+			kgo.WithHooks(sub),
+		},
+		k.kopts...,
 	)
 
 	if options.Context != nil {
