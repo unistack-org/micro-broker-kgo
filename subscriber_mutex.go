@@ -79,6 +79,7 @@ func (s *Subscriber) copyConsumers() map[tp]*consumer {
 	return tpc
 }
 
+// nolint
 func (s *Subscriber) consumersLen() int {
 	s.mu.RLock()
 	n := len(s.consumers)

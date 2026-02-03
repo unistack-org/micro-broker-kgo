@@ -236,11 +236,11 @@ func (pc *consumer) consume() {
 		case <-pc.quit:
 			return
 		case p := <-pc.recs:
-			if p.Err != nil || p.FetchPartition.Err != nil {
+			if p.Err != nil || p.FetchPartition.Err != nil { //nolint:staticcheck
 				if p.Err != nil {
 					pm = pc.newErrorMessage(p.Err, p.Topic, p.Partition)
-				} else if p.FetchPartition.Err != nil {
-					pm = pc.newErrorMessage(p.FetchPartition.Err, p.Topic, p.Partition)
+				} else if p.FetchPartition.Err != nil { //nolint:staticcheck
+					pm = pc.newErrorMessage(p.FetchPartition.Err, p.Topic, p.Partition) //nolint:staticcheck
 				}
 				_ = pc.handler(pm)
 				eventPool.Put(pm)
@@ -297,7 +297,7 @@ func (pc *consumer) consume() {
 								}
 								eventPool.Put(p)
 								pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
-								pc.handler(pm)
+								_ = pc.handler(pm) //TODO need check
 								return
 							}
 							eventPool.Put(p)
@@ -307,7 +307,7 @@ func (pc *consumer) consume() {
 							continue
 						} else {
 							pm := pc.newErrorMessage(err, record.Topic, record.Partition)
-							pc.handler(pm)
+							_ = pc.handler(pm) // TODO need check
 						}
 						te := time.Since(ts)
 						pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
@@ -315,7 +315,7 @@ func (pc *consumer) consume() {
 						pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 						eventPool.Put(p)
 						pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
-						pc.handler(pm)
+						_ = pc.handler(pm) // TODO need check
 						if sp != nil {
 							sp.Finish()
 						}
@@ -365,7 +365,7 @@ func (pc *consumer) consume() {
 				} else {
 					eventPool.Put(p)
 					pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
-					pc.handler(pm)
+					_ = pc.handler(pm) // TODO need check
 					if sp != nil {
 						sp.SetStatus(tracer.SpanStatusError, "ErrLostMessage")
 						sp.Finish()

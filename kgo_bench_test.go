@@ -37,7 +37,9 @@ func Benchmark_PubSub(b *testing.B) {
 			if err := brk.Connect(ctx); err != nil {
 				b.Fatal(err)
 			}
-			defer brk.Disconnect(ctx)
+			defer func() {
+				_ = brk.Disconnect(ctx)
+			}()
 
 			topic := fmt.Sprintf("bench.topic.%d", msgCount)
 
@@ -91,7 +93,7 @@ func Benchmark_PubSub(b *testing.B) {
 				}
 
 				b.StopTimer()
-				sub.Unsubscribe(ctx)
+				_ = sub.Unsubscribe(ctx)
 			}
 		})
 	}
@@ -117,7 +119,9 @@ func Benchmark_PublishOnly(b *testing.B) {
 	if err := brk.Connect(ctx); err != nil {
 		b.Fatal(err)
 	}
-	defer brk.Disconnect(ctx)
+	defer func() {
+		_ = brk.Disconnect(ctx)
+	}()
 
 	msg := &broker.Message{
 		Header: map[string]string{"key": "value"},
@@ -156,7 +160,9 @@ func Benchmark_SubscribeHandler(b *testing.B) {
 	if err := brk.Connect(ctx); err != nil {
 		b.Fatal(err)
 	}
-	defer brk.Disconnect(ctx)
+	defer func() {
+		_ = brk.Disconnect(ctx)
+	}()
 
 	topic := "bench.subscribe.handler"
 
@@ -199,6 +205,6 @@ func Benchmark_SubscribeHandler(b *testing.B) {
 			b.Fatalf("timeout: received %d of %d", received.Load(), msgCount)
 		}
 
-		sub.Unsubscribe(ctx)
+		_ = sub.Unsubscribe(ctx)
 	}
 }
