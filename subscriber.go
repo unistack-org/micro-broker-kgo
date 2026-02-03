@@ -3,6 +3,8 @@ package kgo
 import (
 	"context"
 	"fmt"
+	"maps"
+	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -104,13 +106,24 @@ func (s *Subscriber) poll(ctx context.Context) {
 			fetches := s.c.PollRecords(ctx, maxInflight)
 			if !s.closed && fetches.IsClientClosed() {
 				s.closed = true
+				s.mu.Lock()
+				tpc := make(map[tp]*consumer, len(s.consumers))
+				maps.Copy(tpc, s.consumers)
+				s.mu.Unlock()
+				for tp, c := range tpc {
+					if c != nil {
+						c.recs <- newErrorFetchTopicPartition(kgo.ErrClientClosed, tp.t, tp.p)
+					}
+				}
 				return
 			}
 			fetches.EachError(func(t string, p int32, err error) {
-				if kgo.IsRetryableBrokerErr(err) {
-					s.kopts.Logger.Error(ctx, fmt.Sprintf("[kgo] fetch topic %s partition %d error", t, p), err)
-				} else {
-					s.kopts.Logger.Fatal(ctx, fmt.Sprintf("[kgo] fetch topic %s partition %d error", t, p), err)
+				tps := tp{t, p}
+				s.mu.Lock()
+				c := s.consumers[tps]
+				s.mu.Unlock()
+				if c != nil {
+					c.recs <- newErrorFetchTopicPartition(err, t, p)
 				}
 			})
 
@@ -138,7 +151,7 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 			s.mu.Lock()
 			pc, ok := s.consumers[tps]
 			s.mu.Unlock()
-			if !ok {
+			if !ok || pc == nil {
 				continue
 			}
 			s.mu.Lock()
@@ -154,11 +167,21 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	}
 }
 
-func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+func (s *Subscriber) autocommit(_ *kgo.Client, r *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
 	if err != nil {
-		//		s.connected.Store(0)
-		if s.fatalOnError {
-			s.kopts.Logger.Fatal(context.TODO(), "kgo.AutoCommitCallback error", err)
+		s.mu.Lock()
+		tpc := make(map[tp]*consumer, len(s.consumers))
+		maps.Copy(tpc, s.consumers)
+		s.mu.Unlock()
+
+		for _, tc := range r.Topics {
+			for _, c := range s.consumers {
+				if c != nil {
+					for _, p := range tc.Partitions {
+						c.recs <- newErrorFetchTopicPartition(err, tc.Topic, p.Partition)
+					}
+				}
+			}
 		}
 	}
 }
@@ -168,7 +191,6 @@ func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]
 		s.kopts.Logger.Error(ctx, fmt.Sprintf("[kgo] lost %#+v", lost))
 	}
 	s.killConsumers(ctx, lost)
-	// s.connected.Store(0)
 }
 
 func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[string][]int32) {
@@ -177,8 +199,15 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 	}
 	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
-		s.kopts.Logger.Error(ctx, "[kgo] revoked CommitMarkedOffsets error", err)
-		// s.connected.Store(0)
+		s.mu.Lock()
+		tpc := make(map[tp]*consumer, len(s.consumers))
+		maps.Copy(tpc, s.consumers)
+		s.mu.Unlock()
+		for tp, c := range tpc {
+			if c != nil {
+				c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+			}
+		}
 	}
 }
 
@@ -223,6 +252,27 @@ func (pc *consumer) consume() {
 		case <-pc.quit:
 			return
 		case p := <-pc.recs:
+			if p.Err != nil || p.FetchPartition.Err != nil {
+
+				if p.Err != nil {
+					pm = pc.newErrorMessage(p.Err, p.Topic, p.Partition)
+				} else if p.FetchPartition.Err != nil {
+					pm = pc.newErrorMessage(p.FetchPartition.Err, p.Topic, p.Partition)
+				}
+
+				switch h := pc.handler.(type) {
+				case func(broker.Message) error:
+					_ = h(pm)
+				case func([]broker.Message) error:
+					_ = h([]broker.Message{pm})
+				}
+				if pc.messagePool {
+					messagePool.Put(pm)
+				}
+
+				return
+			}
+
 			for _, record := range p.Records {
 				ctx, sp := pc.htracer.WithProcessSpan(record)
 				ts := time.Now()
@@ -233,19 +283,23 @@ func (pc *consumer) consume() {
 				} else {
 					pm = &kgoMessage{}
 				}
+
 				pm.body = record.Value
 				pm.topic = record.Topic
 				pm.ack = false
 				pm.hdr = metadata.New(len(record.Headers))
 				pm.ctx = ctx
+
 				for _, hdr := range record.Headers {
 					pm.hdr.Set(hdr.Key, string(hdr.Value))
 				}
+
 				pm.hdr.Set("Micro-Offset", strconv.FormatInt(record.Offset, 10))
 				pm.hdr.Set("Micro-Partition", strconv.FormatInt(int64(record.Partition), 10))
 				pm.hdr.Set("Micro-Topic", record.Topic)
 				pm.hdr.Set("Micro-Key", string(record.Key))
 				pm.hdr.Set("Micro-Timestamp", strconv.FormatInt(record.Timestamp.Unix(), 10))
+
 				switch h := pc.handler.(type) {
 				case func(broker.Message) error:
 					err = h(pm)
@@ -269,22 +323,148 @@ func (pc *consumer) consume() {
 
 				ack := pm.ack
 				if pc.messagePool {
-					messagePool.Put(p)
+					messagePool.Put(pm)
 				}
-				if ack {
-					pc.c.MarkCommitRecords(record)
-				} else {
-					if sp != nil {
-						sp.Finish()
-					}
-					//					pc.connected.Store(0)
-					pc.kopts.Logger.Fatal(pc.kopts.Context, "[kgo] message not commited")
-					return
-				}
+
 				if sp != nil {
 					sp.Finish()
 				}
+
+				if ack {
+					pc.c.MarkCommitRecords(record)
+					continue
+				}
+
+				pm := pc.newErrorMessage(ErrLostMessage, p.Topic, p.Partition)
+				switch h := pc.handler.(type) {
+				case func(broker.Message) error:
+					_ = h(pm)
+				case func([]broker.Message) error:
+					_ = h([]broker.Message{pm})
+				}
+				if pc.messagePool {
+					messagePool.Put(pm)
+				}
+				return
 			}
+		}
+	}
+}
+
+func (pc *consumer) newErrorMessage(err error, t string, p int32) *kgoMessage {
+	var pm *kgoMessage
+
+	if pc.messagePool {
+		pm = messagePool.Get().(*kgoMessage)
+	} else {
+		pm = &kgoMessage{}
+	}
+
+	pm.ack = false
+	pm.body = nil
+	pm.err = err
+	pm.topic = t
+	pm.hdr = metadata.New(2)
+	pm.ctx = context.Background()
+	pm.hdr.Set("Micro-Partition", strconv.FormatInt(int64(p), 10))
+	pm.hdr.Set("Micro-Topic", t)
+
+	return pm
+}
+
+func newErrorFetchTopicPartition(err error, t string, p int32) kgo.FetchTopicPartition {
+	return kgo.FetchTopicPartition{
+		Topic: t,
+		FetchPartition: kgo.FetchPartition{
+			Partition: p,
+			Err:       err,
+		},
+	}
+}
+
+var (
+	_ kgo.HookBrokerConnect           = (*Subscriber)(nil)
+	_ kgo.HookBrokerDisconnect        = (*Subscriber)(nil)
+	_ kgo.HookBrokerRead              = (*Subscriber)(nil)
+	_ kgo.HookBrokerWrite             = (*Subscriber)(nil)
+	_ kgo.HookGroupManageError        = (*Subscriber)(nil)
+	_ kgo.HookProduceRecordUnbuffered = (*Subscriber)(nil)
+)
+
+func (s *Subscriber) OnGroupManageError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	tpc := make(map[tp]*consumer, len(s.consumers))
+	maps.Copy(tpc, s.consumers)
+	s.mu.Unlock()
+	for tp, c := range tpc {
+		if c != nil {
+			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+		}
+	}
+}
+
+func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	tpc := make(map[tp]*consumer, len(s.consumers))
+	maps.Copy(tpc, s.consumers)
+	s.mu.Unlock()
+	for tp, c := range tpc {
+		if c != nil {
+			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+		}
+	}
+}
+
+func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
+}
+
+func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	tpc := make(map[tp]*consumer, len(s.consumers))
+	maps.Copy(tpc, s.consumers)
+	s.mu.Unlock()
+	for tp, c := range tpc {
+		if c != nil {
+			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+		}
+	}
+}
+
+func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	tpc := make(map[tp]*consumer, len(s.consumers))
+	maps.Copy(tpc, s.consumers)
+	s.mu.Unlock()
+	for tp, c := range tpc {
+		if c != nil {
+			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+		}
+	}
+}
+
+func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	tpc := make(map[tp]*consumer, len(s.consumers))
+	maps.Copy(tpc, s.consumers)
+	s.mu.Unlock()
+	for tp, c := range tpc {
+		if c != nil {
+			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
 		}
 	}
 }
