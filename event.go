@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"go.unistack.org/micro/v3/broker"
 )
@@ -14,8 +15,7 @@ type event struct {
 
 	topic string
 
-	sync.RWMutex
-	ack bool
+	ack atomic.Bool
 }
 
 func (p *event) Context() context.Context {
@@ -31,7 +31,7 @@ func (p *event) Message() *broker.Message {
 }
 
 func (p *event) Ack() error {
-	p.ack = true
+	p.ack.Store(true)
 	return nil
 }
 
