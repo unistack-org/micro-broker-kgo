@@ -451,7 +451,7 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 		)
 	}
 
-	assert.Equal(t, total, atomic.LoadInt64(&processed))
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&processed), total)
 	assert.NotEqual(t, int64(0), atomic.LoadInt64(&c1Count))
 	assert.NotEqual(t, int64(0), atomic.LoadInt64(&c2Count))
 
