@@ -86,6 +86,6 @@ func (s *Subscriber) sendToConsumer(key tp, ftp kgo.FetchTopicPartition) {
 	c := v.(*consumer)
 	select {
 	case c.recs <- ftp:
-	case <-c.quit:
+	case <-c.ctx.Done():
 	}
 }
