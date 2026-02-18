@@ -67,6 +67,8 @@ type Broker struct {
 	opts broker.Options
 	mu   sync.RWMutex
 
+	publishInflight sync.Map // [topic: *atomic.Int64]
+
 	init bool
 }
 
@@ -197,58 +199,70 @@ func (b *Broker) Connect(ctx context.Context) error {
 
 	if exposeLag {
 		var mu sync.Mutex
-		var lastUpdate time.Time
-		type pl struct {
-			p string
-			l float64
-		}
-
-		lag := make(map[string]map[string]pl) // topic => group => partition => lag
+		lag := make(map[string]float64)
+		registered := make(map[string]bool)
 		ac := kadm.NewClient(b.c)
 
-		updateStats := func() {
-			mu.Lock()
-			if time.Since(lastUpdate) < DefaultStatsInterval {
-				mu.Unlock()
-				return
-			}
-			mu.Unlock()
+		go func() {
+			ticker := time.NewTicker(DefaultStatsInterval)
+			defer ticker.Stop()
 
-			b.mu.Lock()
-			groups := make([]string, 0, len(b.subs))
-			for _, g := range b.subs {
-				groups = append(groups, g.opts.Group)
-			}
-			b.mu.Unlock()
-
-			dgls, err := ac.Lag(ctx, groups...)
-			if err != nil || !dgls.Ok() {
-				b.opts.Logger.Error(b.opts.Context, "kgo describe group lag error", err)
-				return
-			}
-
-			for gn, dgl := range dgls {
-				for tn, lmap := range dgl.Lag {
-					if _, ok := lag[tn]; !ok {
-						lag[tn] = make(map[string]pl)
+			for {
+				select {
+				case <-b.done:
+					return
+				case <-ticker.C:
+					b.mu.RLock()
+					groups := make([]string, 0, len(b.subs))
+					for _, s := range b.subs {
+						groups = append(groups, s.opts.Group)
 					}
-					for p, l := range lmap {
-						lag[tn][gn] = pl{p: strconv.Itoa(int(p)), l: float64(l.Lag)}
+					b.mu.RUnlock()
+
+					if len(groups) == 0 {
+						continue
+					}
+
+					dgls, err := ac.Lag(b.opts.Context, groups...)
+					if err != nil || !dgls.Ok() {
+						b.opts.Logger.Error(b.opts.Context, "kgo describe group lag error", err)
+						continue
+					}
+
+					for gn, dgl := range dgls {
+						for tn, lmap := range dgl.Lag {
+							for p, l := range lmap {
+								ps := strconv.Itoa(int(p))
+								key := tn + "/" + gn + "/" + ps
+
+								mu.Lock()
+								lag[key] = float64(l.Lag)
+								needRegister := !registered[key]
+								if needRegister {
+									registered[key] = true
+								}
+								mu.Unlock()
+
+								if needRegister {
+									k := key
+									b.opts.Meter.Gauge(semconv.BrokerGroupLag,
+										func() float64 {
+											mu.Lock()
+											v := lag[k]
+											mu.Unlock()
+											return v
+										},
+										"topic", tn,
+										"group", gn,
+										"partition", ps,
+									)
+								}
+							}
+						}
 					}
 				}
 			}
-		}
-
-		for tn, dg := range lag {
-			for gn, gl := range dg {
-				b.opts.Meter.Gauge(semconv.BrokerGroupLag,
-					func() float64 { updateStats(); return gl.l },
-					"topic", tn,
-					"group", gn,
-					"partition", gl.p)
-			}
-		}
-
+		}()
 	}
 
 	return nil
@@ -332,6 +346,20 @@ func (b *Broker) Options() broker.Options {
 	return b.opts
 }
 
+func (b *Broker) getPublishInflight(topic string) *atomic.Int64 {
+	if v, ok := b.publishInflight.Load(topic); ok {
+		return v.(*atomic.Int64)
+	}
+	n := &atomic.Int64{}
+	actual, loaded := b.publishInflight.LoadOrStore(topic, n)
+	if !loaded {
+		b.opts.Meter.Gauge(semconv.PublishMessageInflight,
+			func() float64 { return float64(actual.(*atomic.Int64).Load()) },
+			"endpoint", topic, "topic", topic)
+	}
+	return actual.(*atomic.Int64)
+}
+
 func (b *Broker) BatchPublish(ctx context.Context, msgs []*broker.Message, opts ...broker.PublishOption) error {
 	return b.publish(ctx, msgs, opts...)
 }
@@ -364,7 +392,7 @@ func (b *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		rec.Topic, _ = msg.Header.Get(metadata.HeaderTopic)
 		msg.Header.Del(metadata.HeaderTopic)
 
-		b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", rec.Topic, "topic", rec.Topic).Inc()
+		b.getPublishInflight(rec.Topic).Add(1)
 		if options.BodyOnly || b.opts.Codec.String() == "noop" {
 			rec.Value = msg.Body
 			setHeaders(rec, msg.Header)
@@ -381,14 +409,13 @@ func (b *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 		ts := time.Now()
 		for _, rec := range records {
 			b.c.Produce(ctx, rec, func(r *kgo.Record, err error) {
-				te := time.Since(ts)
-				b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", rec.Topic, "topic", rec.Topic).Dec()
-				b.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
-				b.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", rec.Topic, "topic", rec.Topic).Update(te.Seconds())
+				pubMetrics := publishMetrics{m: b.opts.Meter, topic: rec.Topic}
+				b.getPublishInflight(rec.Topic).Add(-1)
+				pubMetrics.recordLatency(time.Since(ts))
 				if err != nil {
-					b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "failure").Inc()
+					pubMetrics.incTotal("failure")
 				} else {
-					b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", rec.Topic, "topic", rec.Topic, "status", "success").Inc()
+					pubMetrics.incTotal("success")
 				}
 				promise(r, err)
 			})
@@ -401,14 +428,14 @@ func (b *Broker) publish(ctx context.Context, msgs []*broker.Message, opts ...br
 
 	te := time.Since(ts)
 	for _, result := range results {
-		b.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
-		b.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
-		b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Dec()
+		pm := publishMetrics{m: b.opts.Meter, topic: result.Record.Topic}
+		pm.recordLatency(te)
+		b.getPublishInflight(result.Record.Topic).Add(-1)
 		if result.Err != nil {
-			b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "failure").Inc()
+			pm.incTotal("failure")
 			errs = append(errs, result.Err.Error())
 		} else {
-			b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "success").Inc()
+			pm.incTotal("success")
 		}
 	}
 
@@ -522,6 +549,10 @@ func (b *Broker) Subscribe(ctx context.Context, topic string, handler broker.Han
 
 	sub.c = c
 	sub.htracer = htracer
+
+	b.opts.Meter.Gauge(semconv.SubscribeMessageInflight,
+		func() float64 { return float64(sub.subscribeInflight.Load()) },
+		"endpoint", topic, "topic", topic)
 
 	go sub.poll(ctx)
 
