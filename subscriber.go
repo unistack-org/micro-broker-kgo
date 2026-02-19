@@ -160,19 +160,18 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	}
 }
 
-func (s *Subscriber) autocommit(_ *kgo.Client, r *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
 	if err == nil || s.closed.Load() {
 		return
 	}
+	// Only increment the metric — do NOT propagate the error to consumer goroutines
+	// via trySend. Transient commit errors are retried automatically by kgo on the
+	// next AutoCommitInterval tick (marks are not cleared on failure). Permanent
+	// failures will eventually cause heartbeat timeout → group rejoin → revoked()
+	// → killConsumers() via the normal rebalance path. Sending the error here would
+	// permanently kill idle consumers without triggering a rebalance — same root
+	// cause as the broker-hook bug.
 	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incCommitError()
-	for _, tc := range r.Topics {
-		for _, p := range tc.Partitions {
-			tps := tp{tc.Topic, p.Partition}
-			if c := s.getConsumer(tps); c != nil {
-				c.trySend(newErrorFetchTopicPartition(err, tc.Topic, p.Partition))
-			}
-		}
-	}
 }
 
 func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]int32) {
@@ -441,65 +440,22 @@ var (
 	_ kgo.HookProduceRecordUnbuffered = (*Subscriber)(nil)
 )
 
+func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, _ error) {
+}
+
+func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {}
+
+func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, _ error) {
+}
+
+func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, _ error) {
+}
+
 func (s *Subscriber) OnGroupManageError(err error) {
 	if err == nil || s.closed.Load() {
 		return
 	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incGroupError()
 }
 
-func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
-	if err == nil || s.closed.Load() {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
-
-func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
-}
-
-func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil || s.closed.Load() {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
-
-func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil || s.closed.Load() {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
-
-func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
-	if err == nil || s.closed.Load() {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
+func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, _ error) {}

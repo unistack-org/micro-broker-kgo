@@ -150,6 +150,10 @@ func (sm subscribeMetrics) incCommitError() {
 	sm.m.Counter(metricBrokerCommitErrorTotal, "endpoint", sm.topic, "topic", sm.topic).Inc()
 }
 
+func (sm subscribeMetrics) incGroupError() {
+	sm.m.Counter(metricBrokerGroupErrors, "endpoint", sm.topic, "topic", sm.topic).Inc()
+}
+
 type publishMetrics struct {
 	m     meter.Meter
 	topic string
