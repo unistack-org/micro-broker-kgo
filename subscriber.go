@@ -164,13 +164,6 @@ func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *k
 	if err == nil || s.closed.Load() {
 		return
 	}
-	// Only increment the metric — do NOT propagate the error to consumer goroutines
-	// via trySend. Transient commit errors are retried automatically by kgo on the
-	// next AutoCommitInterval tick (marks are not cleared on failure). Permanent
-	// failures will eventually cause heartbeat timeout → group rejoin → revoked()
-	// → killConsumers() via the normal rebalance path. Sending the error here would
-	// permanently kill idle consumers without triggering a rebalance — same root
-	// cause as the broker-hook bug.
 	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incCommitError()
 }
 
