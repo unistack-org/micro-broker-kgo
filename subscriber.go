@@ -14,7 +14,6 @@ import (
 	"go.unistack.org/micro/v3/broker"
 	"go.unistack.org/micro/v3/logger"
 	"go.unistack.org/micro/v3/metadata"
-	"go.unistack.org/micro/v3/semconv"
 	"go.unistack.org/micro/v3/tracer"
 )
 
@@ -40,6 +39,7 @@ type consumer struct {
 	kopts broker.Options
 	opts  broker.SubscribeOptions
 
+	inflight  *atomic.Int64
 	partition int32
 }
 
@@ -69,7 +69,6 @@ func (s *Subscriber) Unsubscribe(ctx context.Context) error {
 	})
 	s.killConsumers(ctx, kc)
 	close(s.done)
-	s.c.ResumeFetchTopics(s.topic)
 
 	return nil
 }
@@ -92,7 +91,11 @@ func (s *Subscriber) poll(ctx context.Context) {
 			return
 		default:
 			fetches := s.c.PollRecords(ctx, maxInflight)
-			if !s.closed.Load() && fetches.IsClientClosed() {
+			if s.closed.Load() {
+				s.c.AllowRebalance()
+				return
+			}
+			if fetches.IsClientClosed() {
 				s.closed.Store(true)
 				tpc := s.copyConsumers()
 				for key, c := range tpc {
@@ -157,22 +160,15 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	}
 }
 
-func (s *Subscriber) autocommit(_ *kgo.Client, r *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
-	if err != nil {
-		tpc := s.copyConsumers()
-		for _, tc := range r.Topics {
-			for _, c := range tpc {
-				if c != nil {
-					for _, p := range tc.Partitions {
-						c.trySend(newErrorFetchTopicPartition(err, tc.Topic, p.Partition))
-					}
-				}
-			}
-		}
+func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+	if err == nil || s.closed.Load() {
+		return
 	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incCommitError()
 }
 
 func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]int32) {
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("lost")
 	if s.kopts.Logger.V(logger.ErrorLevel) {
 		s.kopts.Logger.Error(ctx, fmt.Sprintf("[kgo] lost %#+v", lost))
 	}
@@ -180,6 +176,7 @@ func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]
 }
 
 func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[string][]int32) {
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("revoked")
 	if s.kopts.Logger.V(logger.DebugLevel) {
 		s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] revoked %#+v", revoked))
 	}
@@ -195,6 +192,10 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 }
 
 func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[string][]int32) {
+	if s.closed.Load() {
+		return
+	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("assigned")
 	for topic, partitions := range assigned {
 		for _, partition := range partitions {
 			ctx, cancel := context.WithCancel(s.kopts.Context)
@@ -210,6 +211,7 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 				handler:   s.handler,
 				kopts:     s.kopts,
 				opts:      s.opts,
+				inflight:  &s.subscribeInflight,
 				connected: s.connected,
 			}
 			s.setConsumer(tp{topic, partition}, pc)
@@ -232,18 +234,23 @@ func (pc *consumer) consume() {
 	}
 
 	var pm *event
+	subMetrics := subscribeMetrics{m: pc.kopts.Meter, topic: pc.topic}
 
 	for {
 		select {
 		case <-pc.ctx.Done():
 			return
 		case p := <-pc.recs:
+			if pc.ctx.Err() != nil {
+				return
+			}
 			if p.Err != nil || p.FetchPartition.Err != nil { //nolint:staticcheck
 				if p.Err != nil {
 					pm = pc.newErrorMessage(p.Err, p.Topic, p.Partition)
 				} else if p.FetchPartition.Err != nil { //nolint:staticcheck
 					pm = pc.newErrorMessage(p.FetchPartition.Err, p.Topic, p.Partition) //nolint:staticcheck
 				}
+				subMetrics.incTotal("failure")
 				_ = pc.handler(pm)
 				eventPool.Put(pm)
 				return
@@ -255,7 +262,7 @@ func (pc *consumer) consume() {
 				}
 				ctx, sp := pc.htracer.WithProcessSpan(record)
 				ts := time.Now()
-				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Inc()
+				pc.inflight.Add(1)
 				p := eventPool.Get().(*event)
 				p.msg.Header = nil
 				p.msg.Body = nil
@@ -288,37 +295,39 @@ func (pc *consumer) consume() {
 						if sp != nil {
 							sp.SetStatus(tracer.SpanStatusError, err.Error())
 						}
-						pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
+						subMetrics.incTotal("failure")
 						p.err = err
 						p.msg.Body = record.Value
 						if eh != nil {
 							_ = eh(p)
-							pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
+							pc.inflight.Add(-1)
 							if p.ack.Load() {
 								pc.c.MarkCommitRecords(record)
+								if sp != nil {
+									sp.Finish()
+								}
 							} else {
+								subMetrics.recordLatency(time.Since(ts))
 								if sp != nil {
 									sp.Finish()
 								}
 								eventPool.Put(p)
+								subMetrics.incLost()
 								pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
 								_ = pc.handler(pm) //TODO need check
 								return
 							}
 							eventPool.Put(p)
-							te := time.Since(ts)
-							pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-							pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+							subMetrics.recordLatency(time.Since(ts))
 							continue
 						} else {
 							pm := pc.newErrorMessage(err, record.Topic, record.Partition)
 							_ = pc.handler(pm) // TODO need check
 						}
-						te := time.Since(ts)
-						pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
-						pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-						pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+						pc.inflight.Add(-1)
+						subMetrics.recordLatency(time.Since(ts))
 						eventPool.Put(p)
+						subMetrics.incLost()
 						pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
 						_ = pc.handler(pm) // TODO need check
 						if sp != nil {
@@ -335,14 +344,14 @@ func (pc *consumer) consume() {
 					sp.AddEvent("handler stop")
 				}
 				if err == nil {
-					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "success").Inc()
+					subMetrics.incTotal("success")
 				} else {
 					if sp != nil {
 						sp.SetStatus(tracer.SpanStatusError, err.Error())
 					}
-					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
+					subMetrics.incTotal("failure")
 				}
-				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
+				pc.inflight.Add(-1)
 				if err == nil && pc.opts.AutoAck {
 					p.ack.Store(true)
 				} else if err != nil {
@@ -361,14 +370,13 @@ func (pc *consumer) consume() {
 						}
 					}
 				}
-				te := time.Since(ts)
-				pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-				pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+				subMetrics.recordLatency(time.Since(ts))
 				if p.ack.Load() {
 					eventPool.Put(p)
 					pc.c.MarkCommitRecords(record)
 				} else {
 					eventPool.Put(p)
+					subMetrics.incLost()
 					pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
 					_ = pc.handler(pm) // TODO need check
 					if sp != nil {
@@ -425,65 +433,22 @@ var (
 	_ kgo.HookProduceRecordUnbuffered = (*Subscriber)(nil)
 )
 
+func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, _ error) {
+}
+
+func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {}
+
+func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, _ error) {
+}
+
+func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, _ error) {
+}
+
 func (s *Subscriber) OnGroupManageError(err error) {
-	if err == nil {
+	if err == nil || s.closed.Load() {
 		return
 	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incGroupError()
 }
 
-func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
-	if err == nil {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
-
-func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
-}
-
-func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
-
-func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
-
-func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
-	if err == nil {
-		return
-	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
-}
+func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, _ error) {}

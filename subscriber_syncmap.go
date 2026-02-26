@@ -1,4 +1,4 @@
-//go:build syncmap
+//go:build microbroker_syncmap
 
 package kgo
 
@@ -28,6 +28,8 @@ type Subscriber struct {
 
 	closed       atomic.Bool
 	fatalOnError bool
+
+	subscribeInflight atomic.Int64
 }
 
 func (s *Subscriber) initConsumers() {

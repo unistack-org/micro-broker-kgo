@@ -29,6 +29,8 @@ type Subscriber struct {
 	closed       atomic.Bool
 	fatalOnError bool
 
+	subscribeInflight atomic.Int64
+
 	mu sync.RWMutex
 }
 
