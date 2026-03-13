@@ -436,7 +436,7 @@ func (c *consumer) tryErrSend(err error) {
 }
 
 func (s *Subscriber) shouldSendErr(err error) bool {
-	if kgo.IsRetryableBrokerErr(err) || isContextError(err) {
+	if isContextError(err) {
 		return false
 	}
 	s.lastErrMu.Lock()

@@ -25,9 +25,9 @@ func TestShouldSendErr_Filtering(t *testing.T) {
 	}{
 		{"context canceled", context.Canceled, false},
 		{"context deadline exceeded", context.DeadlineExceeded, false},
-		{"retryable: EOF", io.EOF, false},
-		{"retryable: net.ErrClosed", net.ErrClosed, false},
-		{"retryable: os.ErrDeadlineExceeded", os.ErrDeadlineExceeded, false},
+		{"retryable: EOF", io.EOF, true},
+		{"retryable: net.ErrClosed", net.ErrClosed, true},
+		{"retryable: os.ErrDeadlineExceeded", os.ErrDeadlineExceeded, true},
 		{"non-retryable error", errors.New("fatal broker error"), true},
 	}
 
