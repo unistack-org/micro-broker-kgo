@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -16,6 +17,8 @@ import (
 	"go.unistack.org/micro/v3/metadata"
 	"go.unistack.org/micro/v3/tracer"
 )
+
+const errDebounceInterval = 5 * time.Second
 
 type tp struct {
 	t string
@@ -33,6 +36,7 @@ type consumer struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	recs   chan kgo.FetchTopicPartition
+	errs   chan error
 
 	handler broker.Handler
 
@@ -165,6 +169,9 @@ func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *k
 		return
 	}
 	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incCommitError()
+	if s.shouldSendErr(err) {
+		s.notifyConsumers(err)
+	}
 }
 
 func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]int32) {
@@ -208,6 +215,7 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 				cancel:    cancel,
 				done:      make(chan struct{}),
 				recs:      make(chan kgo.FetchTopicPartition, 100),
+				errs:      make(chan error, 8),
 				handler:   s.handler,
 				kopts:     s.kopts,
 				opts:      s.opts,
@@ -240,6 +248,11 @@ func (pc *consumer) consume() {
 		select {
 		case <-pc.ctx.Done():
 			return
+		case err := <-pc.errs:
+			pm = pc.newErrorMessage(err, pc.topic, pc.partition)
+			_ = pc.handler(pm)
+			eventPool.Put(pm)
+			// non-fatal: continue processing
 		case p := <-pc.recs:
 			if pc.ctx.Err() != nil {
 				return
@@ -414,6 +427,37 @@ func (c *consumer) trySend(ftp kgo.FetchTopicPartition) {
 	}
 }
 
+func (c *consumer) tryErrSend(err error) {
+	select {
+	case c.errs <- err:
+	case <-c.ctx.Done():
+	default:
+	}
+}
+
+func (s *Subscriber) shouldSendErr(err error) bool {
+	if kgo.IsRetryableBrokerErr(err) || isContextError(err) {
+		return false
+	}
+	s.lastErrMu.Lock()
+	defer s.lastErrMu.Unlock()
+	if errors.Is(err, s.lastErr) && time.Since(s.lastErrTime) < errDebounceInterval {
+		return false
+	}
+	s.lastErr = err
+	s.lastErrTime = time.Now()
+	return true
+}
+
+func (s *Subscriber) notifyConsumers(err error) {
+	tpc := s.copyConsumers()
+	for _, c := range tpc {
+		if c != nil {
+			c.tryErrSend(err)
+		}
+	}
+}
+
 func newErrorFetchTopicPartition(err error, t string, p int32) kgo.FetchTopicPartition {
 	return kgo.FetchTopicPartition{
 		Topic: t,
@@ -433,15 +477,27 @@ var (
 	_ kgo.HookProduceRecordUnbuffered = (*Subscriber)(nil)
 )
 
-func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, _ error) {
+func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+	if err == nil || !s.shouldSendErr(err) {
+		return
+	}
+	s.notifyConsumers(err)
 }
 
 func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {}
 
-func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, _ error) {
+func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
+	if err == nil || !s.shouldSendErr(err) {
+		return
+	}
+	s.notifyConsumers(err)
 }
 
-func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, _ error) {
+func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
+	if err == nil || !s.shouldSendErr(err) {
+		return
+	}
+	s.notifyConsumers(err)
 }
 
 func (s *Subscriber) OnGroupManageError(err error) {
@@ -449,6 +505,9 @@ func (s *Subscriber) OnGroupManageError(err error) {
 		return
 	}
 	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incGroupError()
+	if s.shouldSendErr(err) {
+		s.notifyConsumers(err)
+	}
 }
 
 func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, _ error) {}
