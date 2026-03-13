@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -23,6 +24,8 @@ type tp struct {
 	p int32
 }
 
+const errDebounceInterval = 5 * time.Second
+
 type consumer struct {
 	topic string
 
@@ -34,6 +37,7 @@ type consumer struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	recs   chan kgo.FetchTopicPartition
+	errs   chan error
 
 	handler broker.Handler
 
@@ -158,15 +162,13 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 }
 
 func (s *Subscriber) autocommit(_ *kgo.Client, r *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
-	if err != nil {
-		tpc := s.copyConsumers()
-		for _, tc := range r.Topics {
-			for _, c := range tpc {
-				if c != nil {
-					for _, p := range tc.Partitions {
-						c.trySend(newErrorFetchTopicPartition(err, tc.Topic, p.Partition))
-					}
-				}
+	if err == nil || !s.shouldSendErr(err) {
+		return
+	}
+	for _, tc := range r.Topics {
+		for _, p := range tc.Partitions {
+			if c := s.getConsumer(tp{tc.Topic, p.Partition}); c != nil {
+				c.tryErrSend(err)
 			}
 		}
 	}
@@ -207,6 +209,7 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 				cancel:    cancel,
 				done:      make(chan struct{}),
 				recs:      make(chan kgo.FetchTopicPartition, 100),
+				errs:      make(chan error, 8),
 				handler:   s.handler,
 				kopts:     s.kopts,
 				opts:      s.opts,
@@ -237,6 +240,11 @@ func (pc *consumer) consume() {
 		select {
 		case <-pc.ctx.Done():
 			return
+		case err := <-pc.errs:
+			pm = pc.newErrorMessage(err, pc.topic, pc.partition)
+			_ = pc.handler(pm)
+			eventPool.Put(pm)
+			// non-fatal: continue processing
 		case p := <-pc.recs:
 			if p.Err != nil || p.FetchPartition.Err != nil { //nolint:staticcheck
 				if p.Err != nil {
@@ -406,6 +414,28 @@ func (c *consumer) trySend(ftp kgo.FetchTopicPartition) {
 	}
 }
 
+func (c *consumer) tryErrSend(err error) {
+	select {
+	case c.errs <- err:
+	case <-c.ctx.Done():
+	default:
+	}
+}
+
+func (s *Subscriber) shouldSendErr(err error) bool {
+	if kgo.IsRetryableBrokerErr(err) || isContextError(err) {
+		return false
+	}
+	s.lastErrMu.Lock()
+	defer s.lastErrMu.Unlock()
+	if errors.Is(err, s.lastErr) && time.Since(s.lastErrTime) < errDebounceInterval {
+		return false
+	}
+	s.lastErr = err
+	s.lastErrTime = time.Now()
+	return true
+}
+
 func newErrorFetchTopicPartition(err error, t string, p int32) kgo.FetchTopicPartition {
 	return kgo.FetchTopicPartition{
 		Topic: t,
@@ -425,65 +455,49 @@ var (
 	_ kgo.HookProduceRecordUnbuffered = (*Subscriber)(nil)
 )
 
-func (s *Subscriber) OnGroupManageError(err error) {
-	if err == nil {
-		return
-	}
+func (s *Subscriber) notifyConsumers(err error) {
 	tpc := s.copyConsumers()
-	for key, c := range tpc {
+	for _, c := range tpc {
 		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
+			c.tryErrSend(err)
 		}
 	}
 }
 
-func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
-	if err == nil {
+func (s *Subscriber) OnGroupManageError(err error) {
+	if err == nil || !s.shouldSendErr(err) {
 		return
 	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
+	s.notifyConsumers(err)
+}
+
+func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+	if err == nil || !s.shouldSendErr(err) {
+		return
 	}
+	s.notifyConsumers(err)
 }
 
 func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
 }
 
 func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil {
+	if err == nil || !s.shouldSendErr(err) {
 		return
 	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
+	s.notifyConsumers(err)
 }
 
 func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil {
+	if err == nil || !s.shouldSendErr(err) {
 		return
 	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
+	s.notifyConsumers(err)
 }
 
 func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
-	if err == nil {
+	if err == nil || !s.shouldSendErr(err) {
 		return
 	}
-	tpc := s.copyConsumers()
-	for key, c := range tpc {
-		if c != nil {
-			c.trySend(newErrorFetchTopicPartition(err, key.t, key.p))
-		}
-	}
+	s.notifyConsumers(err)
 }
