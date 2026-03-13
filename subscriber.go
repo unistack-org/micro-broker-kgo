@@ -221,49 +221,49 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 	}
 }
 
-func (pc *consumer) consume() {
-	defer close(pc.done)
-	defer pc.cancel()
-	if pc.kopts.Logger.V(logger.DebugLevel) {
-		pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("starting, topic %s partition %d", pc.topic, pc.partition))
-		defer pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("killing, topic %s partition %d", pc.topic, pc.partition))
+func (c *consumer) consume() {
+	defer close(c.done)
+	defer c.cancel()
+	if c.kopts.Logger.V(logger.DebugLevel) {
+		c.kopts.Logger.Debug(c.kopts.Context, fmt.Sprintf("starting, topic %s partition %d", c.topic, c.partition))
+		defer c.kopts.Logger.Debug(c.kopts.Context, fmt.Sprintf("killing, topic %s partition %d", c.topic, c.partition))
 	}
 
-	eh := pc.kopts.ErrorHandler
-	if pc.opts.ErrorHandler != nil {
-		eh = pc.opts.ErrorHandler
+	eh := c.kopts.ErrorHandler
+	if c.opts.ErrorHandler != nil {
+		eh = c.opts.ErrorHandler
 	}
 
 	var pm *event
 
 	for {
 		select {
-		case <-pc.ctx.Done():
+		case <-c.ctx.Done():
 			return
-		case err := <-pc.errs:
-			pm = pc.newErrorMessage(err, pc.topic, pc.partition)
-			_ = pc.handler(pm)
+		case err := <-c.errs:
+			pm = c.newErrorMessage(err, c.topic, c.partition)
+			_ = c.handler(pm)
 			eventPool.Put(pm)
 			// non-fatal: continue processing
-		case p := <-pc.recs:
+		case p := <-c.recs:
 			if p.Err != nil || p.FetchPartition.Err != nil { //nolint:staticcheck
 				if p.Err != nil {
-					pm = pc.newErrorMessage(p.Err, p.Topic, p.Partition)
+					pm = c.newErrorMessage(p.Err, p.Topic, p.Partition)
 				} else if p.FetchPartition.Err != nil { //nolint:staticcheck
-					pm = pc.newErrorMessage(p.FetchPartition.Err, p.Topic, p.Partition) //nolint:staticcheck
+					pm = c.newErrorMessage(p.FetchPartition.Err, p.Topic, p.Partition) //nolint:staticcheck
 				}
-				_ = pc.handler(pm)
+				_ = c.handler(pm)
 				eventPool.Put(pm)
 				return
 			}
 
 			for _, record := range p.Records {
-				if pc.ctx.Err() != nil {
+				if c.ctx.Err() != nil {
 					return
 				}
-				ctx, sp := pc.htracer.WithProcessSpan(record)
+				ctx, sp := c.htracer.WithProcessSpan(record)
 				ts := time.Now()
-				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Inc()
+				c.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Inc()
 				p := eventPool.Get().(*event)
 				p.msg.Header = nil
 				p.msg.Body = nil
@@ -280,15 +280,15 @@ func (pc *consumer) consume() {
 				p.msg.Header.Set("Micro-Topic", record.Topic)
 				p.msg.Header.Set("Micro-Key", string(record.Key))
 				p.msg.Header.Set("Micro-Timestamp", strconv.FormatInt(record.Timestamp.Unix(), 10))
-				if pc.kopts.Codec.String() == "noop" {
+				if c.kopts.Codec.String() == "noop" {
 					p.msg.Body = record.Value
-				} else if pc.opts.BodyOnly {
+				} else if c.opts.BodyOnly {
 					p.msg.Body = record.Value
 				} else {
 					if sp != nil {
 						sp.AddEvent("codec unmarshal start")
 					}
-					err := pc.kopts.Codec.Unmarshal(record.Value, p.msg)
+					err := c.kopts.Codec.Unmarshal(record.Value, p.msg)
 					if sp != nil {
 						sp.AddEvent("codec unmarshal stop")
 					}
@@ -296,39 +296,39 @@ func (pc *consumer) consume() {
 						if sp != nil {
 							sp.SetStatus(tracer.SpanStatusError, err.Error())
 						}
-						pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
+						c.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 						p.err = err
 						p.msg.Body = record.Value
 						if eh != nil {
 							_ = eh(p)
-							pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
+							c.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
 							if p.ack.Load() {
-								pc.c.MarkCommitRecords(record)
+								c.c.MarkCommitRecords(record)
 							} else {
 								if sp != nil {
 									sp.Finish()
 								}
 								eventPool.Put(p)
-								pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
-								_ = pc.handler(pm) //TODO need check
+								pm := c.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
+								_ = c.handler(pm) //TODO need check
 								return
 							}
 							eventPool.Put(p)
 							te := time.Since(ts)
-							pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-							pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+							c.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+							c.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 							continue
 						} else {
-							pm := pc.newErrorMessage(err, record.Topic, record.Partition)
-							_ = pc.handler(pm) // TODO need check
+							pm := c.newErrorMessage(err, record.Topic, record.Partition)
+							_ = c.handler(pm) // TODO need check
 						}
 						te := time.Since(ts)
-						pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
-						pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-						pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+						c.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
+						c.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+						c.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 						eventPool.Put(p)
-						pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
-						_ = pc.handler(pm) // TODO need check
+						pm := c.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
+						_ = c.handler(pm) // TODO need check
 						if sp != nil {
 							sp.Finish()
 						}
@@ -338,20 +338,20 @@ func (pc *consumer) consume() {
 				if sp != nil {
 					sp.AddEvent("handler start")
 				}
-				err := pc.handler(p)
+				err := c.handler(p)
 				if sp != nil {
 					sp.AddEvent("handler stop")
 				}
 				if err == nil {
-					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "success").Inc()
+					c.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "success").Inc()
 				} else {
 					if sp != nil {
 						sp.SetStatus(tracer.SpanStatusError, err.Error())
 					}
-					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
+					c.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
 				}
-				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
-				if err == nil && pc.opts.AutoAck {
+				c.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
+				if err == nil && c.opts.AutoAck {
 					p.ack.Store(true)
 				} else if err != nil {
 					p.err = err
@@ -364,21 +364,21 @@ func (pc *consumer) consume() {
 							sp.AddEvent("error handler stop")
 						}
 					} else {
-						if pc.kopts.Logger.V(logger.ErrorLevel) {
-							pc.kopts.Logger.Error(pc.kopts.Context, "[kgo]: subscriber error", err)
+						if c.kopts.Logger.V(logger.ErrorLevel) {
+							c.kopts.Logger.Error(c.kopts.Context, "[kgo]: subscriber error", err)
 						}
 					}
 				}
 				te := time.Since(ts)
-				pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-				pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+				c.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+				c.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
 				if p.ack.Load() {
 					eventPool.Put(p)
-					pc.c.MarkCommitRecords(record)
+					c.c.MarkCommitRecords(record)
 				} else {
 					eventPool.Put(p)
-					pm := pc.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
-					_ = pc.handler(pm) // TODO need check
+					pm := c.newErrorMessage(ErrLostMessage, record.Topic, record.Partition)
+					_ = c.handler(pm) // TODO need check
 					if sp != nil {
 						sp.SetStatus(tracer.SpanStatusError, "ErrLostMessage")
 						sp.Finish()
@@ -393,7 +393,7 @@ func (pc *consumer) consume() {
 	}
 }
 
-func (pc *consumer) newErrorMessage(err error, t string, p int32) *event {
+func (c *consumer) newErrorMessage(err error, t string, p int32) *event {
 	pm := eventPool.Get().(*event)
 
 	pm.ack.Store(false)
