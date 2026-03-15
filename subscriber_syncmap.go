@@ -5,6 +5,7 @@ package kgo
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.unistack.org/micro/v3/broker"
@@ -30,6 +31,10 @@ type Subscriber struct {
 	fatalOnError bool
 
 	subscribeInflight atomic.Int64
+
+	lastErrMu   sync.Mutex
+	lastErr     error
+	lastErrTime time.Time
 }
 
 func (s *Subscriber) initConsumers() {

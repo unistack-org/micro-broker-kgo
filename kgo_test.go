@@ -456,3 +456,44 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 	assert.NotEqual(t, int64(0), atomic.LoadInt64(&c2Count))
 
 }
+
+func TestBrokerErrors_ReachHandler(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cluster := kfake.MustCluster(kfake.AllowAutoTopicCreation())
+
+	b := helperCreateBroker(t, cluster)
+	require.Nil(t, b.Init())
+	require.Nil(t, b.Connect(ctx))
+	defer func() { _ = b.Disconnect(context.Background()) }()
+
+	var errReceived atomic.Value
+
+	fn := func(event broker.Event) error {
+		if event.Error() != nil {
+			errReceived.Store(event.Error())
+		}
+		return event.Ack()
+	}
+
+	sub, err := b.Subscribe(ctx, "test.broker.errors", fn,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test-broker-errors"),
+		broker.SubscribeBodyOnly(true),
+	)
+	require.Nil(t, err)
+	defer func() { _ = sub.Unsubscribe(context.Background()) }()
+
+	// ждём, чтобы консюмер запустился и начал poll
+	time.Sleep(500 * time.Millisecond)
+
+	// рвём все соединения — kgo получит io.EOF/net.ErrClosed на чтении
+	cluster.Close()
+
+	require.Eventually(t, func() bool {
+		return errReceived.Load() != nil
+	}, 10*time.Second, 50*time.Millisecond, "handler не получил ошибку брокера после разрыва соединения")
+
+	t.Logf("handler получил ошибку: %v", errReceived.Load())
+}
