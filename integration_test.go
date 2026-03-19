@@ -1,5 +1,3 @@
-//go:build integration
-
 package kgo_test
 
 import (
@@ -239,11 +237,15 @@ func intCreateTopicAndCleanup(t *testing.T, adm *kadm.Client, topic string, part
 	})
 }
 
-func intCreateBroker(t *testing.T, clientID string) *kgo.Broker {
+func intCreateBroker(t *testing.T, clientID string, addrs ...string) *kgo.Broker {
 	t.Helper()
+	if len(addrs) == 0 {
+		addrs = []string{kafkaAddr}
+	}
 	b := kgo.NewBroker(
-		broker.Addrs(kafkaAddr),
-		broker.Codec(codec.NewCodec()),
+		broker.ContentType("application/octet-stream"),
+		broker.Codec("application/octet-stream", codec.NewCodec()),
+		broker.Addrs(addrs...),
 		kgo.CommitInterval(500*time.Millisecond),
 		kgo.Options(
 			kg.ClientID(clientID),
