@@ -133,7 +133,7 @@ func (m *kgoMessage) Context() context.Context {
 }
 
 func (m *kgoMessage) Topic() string {
-	return ""
+	return m.topic
 }
 
 func (m *kgoMessage) Error() error {
@@ -260,58 +260,86 @@ func (k *Broker) Connect(ctx context.Context) error {
 	}
 
 	if exposeLag {
-		var mu sync.Mutex
-		var lastUpdate time.Time
-		type pl struct {
-			p string
-			l float64
-		}
-
-		lag := make(map[string]map[string]pl) // topic => group => partition => lag
+		var (
+			mu          sync.Mutex
+			lagValues   = make(map[string]float64)
+			lagReg      = make(map[string]bool)
+			lastUpdated time.Time
+			refreshing  bool
+		)
 		ac := kadm.NewClient(k.c)
 
-		updateStats := func() {
+		var refresh func()
+		refresh = func() {
 			mu.Lock()
-			if time.Since(lastUpdate) < DefaultStatsInterval {
+			if refreshing || time.Since(lastUpdated) < DefaultStatsInterval {
+				mu.Unlock()
 				return
 			}
+			refreshing = true
 			mu.Unlock()
 
-			k.mu.Lock()
-			groups := make([]string, 0, len(k.subs))
-			for _, g := range k.subs {
-				groups = append(groups, g.opts.Group)
-			}
-			k.mu.Unlock()
+			defer func() {
+				mu.Lock()
+				refreshing = false
+				mu.Unlock()
+			}()
 
-			dgls, err := ac.Lag(ctx, groups...)
+			k.mu.RLock()
+			groups := make([]string, 0, len(k.subs))
+			for _, s := range k.subs {
+				groups = append(groups, s.opts.Group)
+			}
+			k.mu.RUnlock()
+
+			if len(groups) == 0 {
+				return
+			}
+
+			dgls, err := ac.Lag(k.opts.Context, groups...)
 			if err != nil || !dgls.Ok() {
 				k.opts.Logger.Error(k.opts.Context, "kgo describe group lag error", err)
 				return
 			}
 
+			type entry struct{ key, tn, gn, ps string }
+			var newEntries []entry
+
+			mu.Lock()
+			lastUpdated = time.Now()
 			for gn, dgl := range dgls {
 				for tn, lmap := range dgl.Lag {
-					if _, ok := lag[tn]; !ok {
-						lag[tn] = make(map[string]pl)
-					}
 					for p, l := range lmap {
-						lag[tn][gn] = pl{p: strconv.Itoa(int(p)), l: float64(l.Lag)}
+						ps := strconv.Itoa(int(p))
+						key := tn + "/" + gn + "/" + ps
+						lagValues[key] = float64(l.Lag)
+						if !lagReg[key] {
+							lagReg[key] = true
+							newEntries = append(newEntries, entry{key, tn, gn, ps})
+						}
 					}
 				}
 			}
-		}
+			mu.Unlock()
 
-		for tn, dg := range lag {
-			for gn, gl := range dg {
+			for _, e := range newEntries {
+				key := e.key
 				k.opts.Meter.Gauge(semconv.BrokerGroupLag,
-					func() float64 { updateStats(); return gl.l },
-					"topic", tn,
-					"group", gn,
-					"partition", gl.p)
+					func() float64 {
+						refresh()
+						mu.Lock()
+						v := lagValues[key]
+						mu.Unlock()
+						return v
+					},
+					"topic", e.tn,
+					"group", e.gn,
+					"partition", e.ps,
+				)
 			}
 		}
 
+		go refresh()
 	}
 
 	return nil

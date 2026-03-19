@@ -43,7 +43,6 @@ type consumer struct {
 	messagePool bool
 }
 
-
 func (s *Subscriber) Client() *kgo.Client {
 	return s.c
 }
@@ -189,6 +188,7 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 	if s.kopts.Logger.V(logger.DebugLevel) {
 		s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] revoked %#+v", revoked))
 	}
+	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
 		tpc := s.copyConsumers()
 		for tp, c := range tpc {
@@ -197,7 +197,6 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 			}
 		}
 	}
-	s.killConsumers(ctx, revoked)
 }
 
 func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[string][]int32) {

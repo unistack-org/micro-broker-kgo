@@ -298,35 +298,29 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 
 	done := make(chan struct{})
 
-	h1 := func(msg broker.Message) error {
-		time.Sleep(2 * time.Millisecond)
-
-		atomic.AddInt64(&processed, 1)
-		atomic.AddInt64(&c1Count, 1)
-
-		if atomic.LoadInt64(&processed) >= total {
+	tryClose := func() {
+		if atomic.LoadInt64(&processed) >= total && atomic.LoadInt64(&c2Count) > 0 {
 			select {
 			case <-done:
 			default:
 				close(done)
 			}
 		}
+	}
+
+	h1 := func(msg broker.Message) error {
+		time.Sleep(2 * time.Millisecond)
+		atomic.AddInt64(&processed, 1)
+		atomic.AddInt64(&c1Count, 1)
+		tryClose()
 		return msg.Ack()
 	}
 
 	h2 := func(msg broker.Message) error {
 		time.Sleep(2 * time.Millisecond)
-
 		atomic.AddInt64(&processed, 1)
 		atomic.AddInt64(&c2Count, 1)
-
-		if atomic.LoadInt64(&processed) >= total {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
-		}
+		tryClose()
 		return msg.Ack()
 	}
 
@@ -341,7 +335,7 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 	defer func() { _ = sub1.Unsubscribe(context.Background()) }()
 
 	go func() {
-		for atomic.LoadInt64(&processed) < total {
+		for atomic.LoadInt64(&processed) < total || atomic.LoadInt64(&c2Count) == 0 {
 			batchSize := int64(10)
 			msgs := make([]broker.Message, 0, batchSize)
 			for i := int64(0); i < batchSize; i++ {
@@ -380,8 +374,8 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 		)
 	}
 
-	if got := atomic.LoadInt64(&processed); got != total {
-		t.Fatalf("processed %d, want %d", got, total)
+	if got := atomic.LoadInt64(&processed); got < total {
+		t.Fatalf("processed %d, want >= %d", got, total)
 	}
 
 	if atomic.LoadInt64(&c1Count) == 0 {
