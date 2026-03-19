@@ -227,7 +227,6 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 			}
 			return nil, nil, err
 		}
-		k.connected.Store(1)
 		return c, htracer, nil
 	}
 }
@@ -248,6 +247,12 @@ func (k *Broker) Connect(ctx context.Context) error {
 	}
 
 	k.mu.Lock()
+	if k.c != nil {
+		// another goroutine connected concurrently
+		k.mu.Unlock()
+		c.CloseAllowingRebalance()
+		return nil
+	}
 	k.c = c
 	k.connected.Store(1)
 	k.mu.Unlock()
@@ -350,9 +355,8 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 		return nil
 	}
 
-	nctx := k.opts.Context
-	if ctx != nil {
-		nctx = ctx
+	if ctx == nil {
+		ctx = k.opts.Context
 	}
 	var span tracer.Span
 	ctx, span = k.opts.Tracer.Start(ctx, "Disconnect")
@@ -361,8 +365,8 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	select {
-	case <-nctx.Done():
-		return nctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
 	default:
 		for _, sub := range k.subs {
 			if sub.closed.Load() {
@@ -502,19 +506,24 @@ func (b *Broker) publish(ctx context.Context, topic string, messages ...broker.M
 	if len(records) > 0 {
 		var errs []string
 		ts := time.Now()
-		b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", topic, "topic", topic).Set(uint64(len(records)))
+		inflightCtr := b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", topic, "topic", topic)
+		inflightCtr.Add(len(records))
 		results := b.c.ProduceSync(ctx, records...)
 		te := time.Since(ts)
 		for _, result := range results {
+			inflightCtr.Dec()
 			b.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
 			b.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
-			b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Dec()
 			if result.Err != nil {
 				b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "failure").Inc()
 				errs = append(errs, result.Err.Error())
 			} else {
 				b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "success").Inc()
 			}
+		}
+		// Ensure inflight counter is balanced even if results count diverges from records count.
+		if remaining := len(records) - len(results); remaining > 0 {
+			inflightCtr.Add(-remaining)
 		}
 
 		if len(errs) > 0 {
@@ -567,14 +576,14 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 		}
 	}
 
-	var messagePool bool
+	var useMessagePool bool
 	var fatalOnError bool
 	if b.opts.Context != nil {
 		if v, ok := b.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
 			fatalOnError = v
 		}
 		if v, ok := b.opts.Context.Value(subscribeMessagePoolKey{}).(bool); ok && v {
-			messagePool = v
+			useMessagePool = v
 		}
 	}
 
@@ -592,7 +601,7 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 		done:         make(chan struct{}),
 		fatalOnError: fatalOnError,
 		connected:    b.connected,
-		messagePool:  messagePool,
+		messagePool:  useMessagePool,
 	}
 	sub.initConsumers()
 
@@ -643,7 +652,13 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 	go sub.poll(ctx)
 
 	b.mu.Lock()
-	b.subs = append(b.subs, sub)
+	active := b.subs[:0]
+	for _, s := range b.subs {
+		if !s.closed.Load() {
+			active = append(active, s)
+		}
+	}
+	b.subs = append(active, sub)
 	b.mu.Unlock()
 
 	return sub, nil

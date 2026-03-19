@@ -90,5 +90,7 @@ func (s *Subscriber) sendToConsumer(key tp, ftp kgo.FetchTopicPartition) {
 	select {
 	case c.recs <- ftp:
 	case <-c.ctx.Done():
+	default:
+		// consumer channel full; record dropped — will be redelivered after rebalance since offset won't be committed
 	}
 }

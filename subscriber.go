@@ -56,7 +56,7 @@ func (s *Subscriber) Topic() string {
 }
 
 func (s *Subscriber) Unsubscribe(ctx context.Context) error {
-	if s.closed.Load() {
+	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
@@ -69,7 +69,6 @@ func (s *Subscriber) Unsubscribe(ctx context.Context) error {
 	})
 	s.killConsumers(ctx, kc)
 	close(s.done)
-	s.closed.Store(true)
 	s.c.ResumeFetchTopics(s.topic)
 
 	return nil
@@ -191,9 +190,9 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
 		tpc := s.copyConsumers()
-		for tp, c := range tpc {
+		for _, c := range tpc {
 			if c != nil {
-				c.trySend(newErrorFetchTopicPartition(err, tp.t, tp.p))
+				c.tryErrSend(err)
 			}
 		}
 	}
@@ -328,11 +327,12 @@ func (pc *consumer) consume() {
 					}
 				}()
 
+				var timedOut bool
 				select {
 				case err = <-errChan:
 				case <-processCtx.Done():
-					//err = fmt.Errorf("[kgo] message processing timeout topic %s partition %d offset %d", record.Topic, record.Partition, record.Offset)
 					err = processCtx.Err()
+					timedOut = true
 				}
 				cancel()
 
@@ -353,7 +353,8 @@ func (pc *consumer) consume() {
 				subMetrics.recordLatency(te)
 
 				ack := pm.ack
-				if pc.messagePool {
+				// On timeout the handler goroutine is still running with pm; let it be GC'd rather than risk a pool data race.
+				if pc.messagePool && !timedOut {
 					messagePool.Put(pm)
 				}
 
