@@ -56,7 +56,7 @@ const (
 
 	labelNode    = "node_id"
 	labelSuccess = "success"
-	labelFaulure = "failure"
+	labelFailure = "failure"
 	labelStatus  = "status"
 	labelTopic   = "topic"
 )
@@ -68,7 +68,7 @@ func (m *hookMeter) OnGroupManageError(_ error) {
 func (m *hookMeter) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	node := strconv.Itoa(int(meta.NodeID))
 	if err != nil {
-		m.meter.Counter(metricBrokerConnects, labelNode, node, labelStatus, labelFaulure).Inc()
+		m.meter.Counter(metricBrokerConnects, labelNode, node, labelStatus, labelFailure).Inc()
 		return
 	}
 	m.meter.Counter(metricBrokerConnects, labelNode, node, labelStatus, labelSuccess).Inc()

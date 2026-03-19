@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
 	kg "github.com/twmb/franz-go/pkg/kgo"
 	kgo "go.unistack.org/micro-broker-kgo/v4"
@@ -389,4 +390,54 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 	if atomic.LoadInt64(&c2Count) == 0 {
 		t.Fatalf("consumer2 did not process any messages (rebalance/killConsumers likely broken)")
 	}
+}
+
+func TestBrokerErrors_ReachHandler(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCluster := kfake.MustCluster(kfake.AllowAutoTopicCreation())
+
+	b := kgo.NewBroker(
+		broker.ContentType("application/octet-stream"),
+		broker.Codec("application/octet-stream", codec.NewCodec()),
+		broker.Addrs(errCluster.ListenAddrs()...),
+		kgo.CommitInterval(5*time.Second),
+		kgo.Options(
+			kg.ClientID("test-broker-errors"),
+			kg.AllowAutoTopicCreation(),
+		),
+	)
+	require.NoError(t, b.Init())
+	require.NoError(t, b.Connect(ctx))
+	defer func() { _ = b.Disconnect(context.Background()) }()
+
+	var errReceived atomic.Value
+
+	fn := func(msg broker.Message) error {
+		if km, ok := msg.(interface{ Error() error }); ok && km.Error() != nil {
+			errReceived.Store(km.Error())
+		}
+		return msg.Ack()
+	}
+
+	sub, err := b.Subscribe(ctx, "test.broker.errors", fn,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test-broker-errors"),
+		broker.SubscribeBodyOnly(true),
+	)
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe(context.Background()) }()
+
+	// ждём, чтобы consumer запустился
+	time.Sleep(500 * time.Millisecond)
+
+	// рвём все соединения — kgo получит io.EOF/net.ErrClosed
+	errCluster.Close()
+
+	require.Eventually(t, func() bool {
+		return errReceived.Load() != nil
+	}, 10*time.Second, 50*time.Millisecond, "handler не получил ошибку брокера после разрыва соединения")
+
+	t.Logf("handler получил ошибку: %v", errReceived.Load())
 }
