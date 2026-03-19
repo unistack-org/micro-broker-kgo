@@ -216,19 +216,19 @@ func TestAutocommit_NoError(t *testing.T) {
 
 	var notified atomic.Bool
 
-	s := &Subscriber{
-		consumers: map[tp]*consumer{
-			{t: "topic", p: 0}: {
-				ctx:  ctx,
-				errs: make(chan error, 8),
-			},
-		},
+	pc := &consumer{
+		ctx:  ctx,
+		errs: make(chan error, 8),
 	}
+
+	s := &Subscriber{}
+	s.initConsumers()
+	s.setConsumer(tp{t: "topic", p: 0}, pc)
 
 	s.autocommit(nil, nil, nil, nil)
 
 	select {
-	case <-s.consumers[tp{"topic", 0}].errs:
+	case <-s.getConsumer(tp{t: "topic", p: 0}).errs:
 		notified.Store(true)
 	default:
 	}
@@ -246,10 +246,10 @@ func TestAutocommit_ClosedSubscriber(t *testing.T) {
 		errs: make(chan error, 8),
 	}
 
-	s := &Subscriber{
-		consumers: map[tp]*consumer{{t: "topic", p: 0}: pc},
-		closed:    true,
-	}
+	s := &Subscriber{}
+	s.initConsumers()
+	s.setConsumer(tp{t: "topic", p: 0}, pc)
+	s.closed.Store(true)
 
 	s.autocommit(nil, nil, nil, errors.New("commit error"))
 
@@ -274,8 +274,11 @@ func TestAutocommit_ErrorRoutedViaErrs(t *testing.T) {
 	})
 
 	s := &Subscriber{
-		consumers: map[tp]*consumer{{t: "test-topic", p: 0}: pc},
+		kopts: broker.NewOptions(broker.Logger(logger.DefaultLogger)),
+		topic: "test-topic",
 	}
+	s.initConsumers()
+	s.setConsumer(tp{t: "test-topic", p: 0}, pc)
 
 	go pc.consume()
 	defer func() {
@@ -304,8 +307,10 @@ func TestAutocommit_ErrorRoutedViaErrs(t *testing.T) {
 // Запускается с -race.
 func TestAutocommit_NoRaceOnConsumersMap(t *testing.T) {
 	s := &Subscriber{
-		consumers: map[tp]*consumer{},
+		kopts: broker.NewOptions(broker.Logger(logger.DefaultLogger)),
+		topic: "topic",
 	}
+	s.initConsumers()
 
 	commitErr := errors.New("commit error")
 
@@ -314,9 +319,7 @@ func TestAutocommit_NoRaceOnConsumersMap(t *testing.T) {
 		wg.Add(2)
 		go func(i int) {
 			defer wg.Done()
-			s.mu.Lock()
-			s.consumers[tp{t: "topic", p: int32(i)}] = nil
-			s.mu.Unlock()
+			s.setConsumer(tp{t: "topic", p: int32(i)}, nil)
 		}(i)
 		go func() {
 			defer wg.Done()
@@ -330,40 +333,39 @@ func TestAutocommit_NoRaceOnConsumersMap(t *testing.T) {
 
 // TestAssigned_SkipsWhenClosed: при closed==true assigned() не создаёт consumers.
 func TestAssigned_SkipsWhenClosed(t *testing.T) {
-	s := &Subscriber{
-		consumers: map[tp]*consumer{},
-		closed:    true,
-	}
+	s := &Subscriber{}
+	s.initConsumers()
+	s.closed.Store(true)
 
 	s.assigned(context.Background(), nil, map[string][]int32{
 		"topic": {0, 1, 2},
 	})
 
-	assert.Empty(t, s.consumers, "closed subscriber не должен создавать consumers")
+	assert.Equal(t, 0, s.consumersLen(), "closed subscriber не должен создавать consumers")
 }
 
 // TestAssigned_SpawnsConsumers: при closed==false assigned() создаёт consumers и запускает goroutines.
 func TestAssigned_SpawnsConsumers(t *testing.T) {
 	s := &Subscriber{
-		consumers: map[tp]*consumer{},
-		closed:    false,
-		kopts:     broker.NewOptions(broker.Logger(logger.DefaultLogger)),
+		kopts: broker.NewOptions(broker.Logger(logger.DefaultLogger)),
 		handler: func(msg broker.Message) error {
 			return msg.Ack()
 		},
 	}
+	s.initConsumers()
 
 	s.assigned(context.Background(), nil, map[string][]int32{
 		"topic": {0, 1},
 	})
 
-	assert.Len(t, s.consumers, 2, "должны быть созданы 2 consumers")
+	assert.Equal(t, 2, s.consumersLen(), "должны быть созданы 2 consumers")
 
 	// Корректно останавливаем
-	for _, pc := range s.consumers {
+	s.rangeConsumers(func(_ tp, pc *consumer) bool {
 		pc.cancel()
 		<-pc.done
-	}
+		return true
+	})
 }
 
 // TestKillConsumers_DoubleCancelSafe: двойной вызов cancel() не паникует.

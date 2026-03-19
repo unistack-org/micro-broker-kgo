@@ -7,6 +7,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.unistack.org/micro/v4/meter"
+	"go.unistack.org/micro/v4/semconv"
 )
 
 type hookMeter struct {
@@ -52,7 +53,11 @@ const (
 	metricBrokerFetchBytesCompressed     = "broker_consume_bytes_compressed_total"
 	metricBrokerFetchBytesUncompressed   = "broker_consume_bytes_uncompressed_total"
 
-	metricBrokerGroupErrors = "broker_group_errors_total"
+	metricBrokerGroupErrors  = "broker_group_errors_total"
+	metricBrokerLostMessages = "broker_lost_messages_total"
+
+	metricBrokerRebalanceTotal   = "broker_rebalance_total"
+	metricBrokerCommitErrorTotal = "broker_commit_errors_total"
 
 	labelNode    = "node_id"
 	labelSuccess = "success"
@@ -117,4 +122,48 @@ func (m *hookMeter) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ in
 	node := strconv.Itoa(int(meta.NodeID))
 	m.meter.Counter(metricBrokerFetchBytesUncompressed, labelNode, node, labelTopic, topic).Add(kmetrics.UncompressedBytes)
 	m.meter.Counter(metricBrokerFetchBytesCompressed, labelNode, node, labelTopic, topic).Add(kmetrics.CompressedBytes)
+}
+
+type subscribeMetrics struct {
+	m     meter.Meter
+	topic string
+}
+
+func (sm subscribeMetrics) incTotal(status string) {
+	sm.m.Counter(semconv.SubscribeMessageTotal, "endpoint", sm.topic, "topic", sm.topic, "status", status).Inc()
+}
+
+func (sm subscribeMetrics) recordLatency(d time.Duration) {
+	sm.m.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", sm.topic, "topic", sm.topic).Update(d.Seconds())
+	sm.m.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", sm.topic, "topic", sm.topic).Update(d.Seconds())
+}
+
+func (sm subscribeMetrics) incLost() {
+	sm.m.Counter(metricBrokerLostMessages, "endpoint", sm.topic, "topic", sm.topic).Inc()
+}
+
+func (sm subscribeMetrics) incRebalance(event string) {
+	sm.m.Counter(metricBrokerRebalanceTotal, "endpoint", sm.topic, "topic", sm.topic, "event", event).Inc()
+}
+
+func (sm subscribeMetrics) incCommitError() {
+	sm.m.Counter(metricBrokerCommitErrorTotal, "endpoint", sm.topic, "topic", sm.topic).Inc()
+}
+
+func (sm subscribeMetrics) incGroupError() {
+	sm.m.Counter(metricBrokerGroupErrors, "endpoint", sm.topic, "topic", sm.topic).Inc()
+}
+
+type publishMetrics struct {
+	m     meter.Meter
+	topic string
+}
+
+func (pm publishMetrics) incTotal(status string) {
+	pm.m.Counter(semconv.PublishMessageTotal, "endpoint", pm.topic, "topic", pm.topic, "status", status).Inc()
+}
+
+func (pm publishMetrics) recordLatency(d time.Duration) {
+	pm.m.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", pm.topic, "topic", pm.topic).Update(d.Seconds())
+	pm.m.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", pm.topic, "topic", pm.topic).Update(d.Seconds())
 }

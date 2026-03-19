@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"strconv"
 	"sync"
@@ -44,25 +43,6 @@ type consumer struct {
 	messagePool bool
 }
 
-type Subscriber struct {
-	consumers   map[tp]*consumer
-	c           *kgo.Client
-	htracer     *hookTracer
-	topic       string
-	messagePool bool
-	handler     interface{}
-	done        chan struct{}
-	kopts       broker.Options
-	opts        broker.SubscribeOptions
-	connected   *atomic.Uint32
-	lastErrMu   sync.Mutex
-	lastErr     error
-	lastErrTime time.Time
-
-	mu           sync.RWMutex
-	closed       bool
-	fatalOnError bool
-}
 
 func (s *Subscriber) Client() *kgo.Client {
 	return s.c
@@ -77,21 +57,20 @@ func (s *Subscriber) Topic() string {
 }
 
 func (s *Subscriber) Unsubscribe(ctx context.Context) error {
-	if s.closed {
+	if s.closed.Load() {
 		return nil
 	}
 
 	s.c.PauseFetchTopics(s.topic)
 	s.c.CloseAllowingRebalance()
 	kc := make(map[string][]int32)
-	for ctp := range s.consumers {
-		kc[ctp.t] = append(kc[ctp.t], ctp.p)
-	}
+	s.rangeConsumers(func(key tp, _ *consumer) bool {
+		kc[key.t] = append(kc[key.t], key.p)
+		return true
+	})
 	s.killConsumers(ctx, kc)
-	s.mu.Lock()
 	close(s.done)
-	s.closed = true
-	s.mu.Unlock()
+	s.closed.Store(true)
 	s.c.ResumeFetchTopics(s.topic)
 
 	return nil
@@ -115,19 +94,13 @@ func (s *Subscriber) poll(ctx context.Context) {
 			return
 		default:
 			fetches := s.c.PollRecords(ctx, maxInflight)
-			s.mu.RLock()
-			closed := s.closed
-			s.mu.RUnlock()
-			if closed {
+			if s.closed.Load() {
 				s.c.AllowRebalance()
 				return
 			}
 			if fetches.IsClientClosed() {
-				s.mu.Lock()
-				s.closed = true
-				tpc := make(map[tp]*consumer, len(s.consumers))
-				maps.Copy(tpc, s.consumers)
-				s.mu.Unlock()
+				s.closed.Store(true)
+				tpc := s.copyConsumers()
 				for tp, c := range tpc {
 					if c != nil {
 						c.trySend(newErrorFetchTopicPartition(kgo.ErrClientClosed, tp.t, tp.p))
@@ -136,23 +109,14 @@ func (s *Subscriber) poll(ctx context.Context) {
 				return
 			}
 			fetches.EachError(func(t string, p int32, err error) {
-				tps := tp{t, p}
-				s.mu.RLock()
-				c := s.consumers[tps]
-				s.mu.RUnlock()
+				c := s.getConsumer(tp{t, p})
 				if c != nil {
 					c.trySend(newErrorFetchTopicPartition(err, t, p))
 				}
 			})
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-				tps := tp{p.Topic, p.Partition}
-				s.mu.RLock()
-				c := s.consumers[tps]
-				s.mu.RUnlock()
-				if c != nil {
-					c.recs <- p
-				}
+				s.sendToConsumer(tp{p.Topic, p.Partition}, p)
 			})
 			s.c.AllowRebalance()
 		}
@@ -166,12 +130,7 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	for topic, partitions := range lost {
 		for _, partition := range partitions {
 			tps := tp{topic, partition}
-			s.mu.Lock()
-			pc, ok := s.consumers[tps]
-			if ok {
-				delete(s.consumers, tps)
-			}
-			s.mu.Unlock()
+			pc, ok := s.deleteConsumer(tps)
 			if !ok || pc == nil {
 				continue
 			}
@@ -208,18 +167,17 @@ func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *k
 	if err == nil {
 		return
 	}
-	s.mu.RLock()
-	closed := s.closed
-	s.mu.RUnlock()
-	if closed {
+	if s.closed.Load() {
 		return
 	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incCommitError()
 	if s.shouldSendErr(err) {
 		s.notifyConsumers(err)
 	}
 }
 
 func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]int32) {
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("lost")
 	if s.kopts.Logger.V(logger.ErrorLevel) {
 		s.kopts.Logger.Error(ctx, fmt.Sprintf("[kgo] lost %#+v", lost))
 	}
@@ -227,17 +185,15 @@ func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]
 }
 
 func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[string][]int32) {
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("revoked")
 	if s.kopts.Logger.V(logger.DebugLevel) {
 		s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] revoked %#+v", revoked))
 	}
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
-		s.mu.Lock()
-		tpc := make(map[tp]*consumer, len(s.consumers))
-		maps.Copy(tpc, s.consumers)
-		s.mu.Unlock()
+		tpc := s.copyConsumers()
 		for tp, c := range tpc {
 			if c != nil {
-				c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+				c.trySend(newErrorFetchTopicPartition(err, tp.t, tp.p))
 			}
 		}
 	}
@@ -245,12 +201,10 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 }
 
 func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[string][]int32) {
-	s.mu.RLock()
-	closed := s.closed
-	s.mu.RUnlock()
-	if closed {
+	if s.closed.Load() {
 		return
 	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("assigned")
 	for topic, partitions := range assigned {
 		for _, partition := range partitions {
 			ctx, cancel := context.WithCancel(s.kopts.Context)
@@ -270,9 +224,7 @@ func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[str
 				opts:        s.opts,
 				connected:   s.connected,
 			}
-			s.mu.Lock()
-			s.consumers[tp{topic, partition}] = pc
-			s.mu.Unlock()
+			s.setConsumer(tp{topic, partition}, pc)
 			go pc.consume()
 		}
 	}
@@ -289,6 +241,8 @@ func (pc *consumer) consume() {
 	}
 
 	var pm *kgoMessage
+
+	subMetrics := subscribeMetrics{m: pc.kopts.Meter, topic: pc.topic}
 
 	for {
 		select {
@@ -388,14 +342,16 @@ func (pc *consumer) consume() {
 					if sp != nil {
 						sp.SetStatus(tracer.SpanStatusError, err.Error())
 					}
-					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
-				} else if pc.opts.AutoAck {
-					pm.ack = true
+					subMetrics.incTotal("failure")
+				} else {
+					subMetrics.incTotal("success")
+					if pc.opts.AutoAck {
+						pm.ack = true
+					}
 				}
 
 				te := time.Since(ts)
-				pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-				pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+				subMetrics.recordLatency(te)
 
 				ack := pm.ack
 				if pc.messagePool {
@@ -413,6 +369,7 @@ func (pc *consumer) consume() {
 
 				pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("[kgo] message not acknowledged topic %s partition %d offset %d", record.Topic, record.Partition, record.Offset))
 
+				subMetrics.incLost()
 				pm := pc.newErrorMessage(ErrLostMessage, p.Topic, p.Partition)
 				switch h := pc.handler.(type) {
 				case func(broker.Message) error:
@@ -481,10 +438,7 @@ func (s *Subscriber) shouldSendErr(err error) bool {
 }
 
 func (s *Subscriber) notifyConsumers(err error) {
-	s.mu.RLock()
-	tpc := make(map[tp]*consumer, len(s.consumers))
-	maps.Copy(tpc, s.consumers)
-	s.mu.RUnlock()
+	tpc := s.copyConsumers()
 	for _, c := range tpc {
 		if c != nil {
 			c.tryErrSend(err)

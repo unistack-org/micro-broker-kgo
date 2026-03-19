@@ -337,7 +337,7 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 		return nctx.Err()
 	default:
 		for _, sub := range k.subs {
-			if sub.closed {
+			if sub.closed.Load() {
 				continue
 			}
 			if err := sub.Unsubscribe(ctx); err != nil {
@@ -561,12 +561,12 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 		opts:         options,
 		handler:      handler,
 		kopts:        b.opts,
-		consumers:    make(map[tp]*consumer),
 		done:         make(chan struct{}),
 		fatalOnError: fatalOnError,
 		connected:    b.connected,
 		messagePool:  messagePool,
 	}
+	sub.initConsumers()
 
 	kopts := append(
 		[]kgo.Opt{

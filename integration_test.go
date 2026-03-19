@@ -1,3 +1,5 @@
+//go:build integration
+
 package kgo_test
 
 import (

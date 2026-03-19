@@ -412,11 +412,12 @@ func TestBrokerErrors_ReachHandler(t *testing.T) {
 	require.NoError(t, b.Connect(ctx))
 	defer func() { _ = b.Disconnect(context.Background()) }()
 
+	type errWrapper struct{ err error }
 	var errReceived atomic.Value
 
 	fn := func(msg broker.Message) error {
 		if km, ok := msg.(interface{ Error() error }); ok && km.Error() != nil {
-			errReceived.Store(km.Error())
+			errReceived.Store(errWrapper{km.Error()})
 		}
 		return msg.Ack()
 	}
@@ -439,5 +440,7 @@ func TestBrokerErrors_ReachHandler(t *testing.T) {
 		return errReceived.Load() != nil
 	}, 10*time.Second, 50*time.Millisecond, "handler не получил ошибку брокера после разрыва соединения")
 
-	t.Logf("handler получил ошибку: %v", errReceived.Load())
+	if w, ok := errReceived.Load().(errWrapper); ok {
+		t.Logf("handler получил ошибку: %v", w.err)
+	}
 }
