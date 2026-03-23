@@ -30,6 +30,7 @@ type Subscriber struct {
 
 	mu           sync.RWMutex
 	closed       atomic.Bool
+	draining     atomic.Bool
 	fatalOnError bool
 }
 

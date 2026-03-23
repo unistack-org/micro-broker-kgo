@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,7 +70,6 @@ func (s *Subscriber) Unsubscribe(ctx context.Context) error {
 	})
 	s.killConsumers(ctx, kc)
 	close(s.done)
-	s.c.ResumeFetchTopics(s.topic)
 
 	return nil
 }
@@ -199,7 +199,7 @@ func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[str
 }
 
 func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[string][]int32) {
-	if s.closed.Load() {
+	if s.closed.Load() || s.draining.Load() {
 		return
 	}
 	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("assigned")
@@ -315,26 +315,21 @@ func (pc *consumer) consume() {
 				pm.hdr.Set("Micro-Key", string(record.Key))
 				pm.hdr.Set("Micro-Timestamp", strconv.FormatInt(record.Timestamp.Unix(), 10))
 
-				processCtx, cancel := context.WithTimeout(ctx, pc.kopts.GracefulTimeout)
-				errChan := make(chan error, 1)
-
-				go func() {
-					switch h := pc.handler.(type) {
-					case func(broker.Message) error:
-						errChan <- h(pm)
-					case func([]broker.Message) error:
-						errChan <- h([]broker.Message{pm})
-					}
-				}()
-
-				var timedOut bool
-				select {
-				case err = <-errChan:
-				case <-processCtx.Done():
-					err = processCtx.Err()
-					timedOut = true
+				ct := pm.hdr.GetJoined(metadata.HeaderContentType)
+				if ct == "" {
+					ct = pc.kopts.ContentType
 				}
-				cancel()
+				if idx := strings.IndexRune(ct, ';'); idx >= 0 {
+					ct = ct[:idx]
+				}
+				pm.c = pc.kopts.Codecs[ct]
+
+				switch h := pc.handler.(type) {
+				case func(broker.Message) error:
+					err = h(pm)
+				case func([]broker.Message) error:
+					err = h([]broker.Message{pm})
+				}
 
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
 				if err != nil {
@@ -353,8 +348,7 @@ func (pc *consumer) consume() {
 				subMetrics.recordLatency(te)
 
 				ack := pm.ack
-				// On timeout the handler goroutine is still running with pm; let it be GC'd rather than risk a pool data race.
-				if pc.messagePool && !timedOut {
+				if pc.messagePool {
 					messagePool.Put(pm)
 				}
 

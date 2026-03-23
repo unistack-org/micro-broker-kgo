@@ -29,6 +29,7 @@ type Subscriber struct {
 	lastErrTime time.Time
 
 	closed       atomic.Bool
+	draining     atomic.Bool
 	fatalOnError bool
 }
 

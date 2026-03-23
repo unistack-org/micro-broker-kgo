@@ -386,6 +386,68 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 	}
 }
 
+func TestGracefulShutdown_HandlersComplete(t *testing.T) {
+	ctx := context.Background()
+
+	const handlerDuration = 3 * time.Second
+	const gracefulTimeout = 5 * time.Second
+
+	b := kgo.NewBroker(
+		broker.ContentType("application/octet-stream"),
+		broker.Codec("application/octet-stream", codec.NewCodec()),
+		broker.Addrs(cluster.ListenAddrs()...),
+		broker.GracefulTimeout(gracefulTimeout),
+		kgo.CommitInterval(5*time.Second),
+		kgo.Options(
+			kg.ClientID("test-graceful"),
+			kg.AllowAutoTopicCreation(),
+			kg.MaxBufferedRecords(10),
+		),
+	)
+	require.NoError(t, b.Init())
+	require.NoError(t, b.Connect(ctx))
+
+	m, err := b.NewMessage(ctx, metadata.New(0), []byte("graceful-test"))
+	require.NoError(t, err)
+	require.NoError(t, b.Publish(ctx, "test.graceful", m))
+
+	var handlerCompleted atomic.Bool
+	handlerStarted := make(chan struct{})
+
+	fn := func(msg broker.Message) error {
+		close(handlerStarted)
+		time.Sleep(handlerDuration)
+		handlerCompleted.Store(true)
+		return msg.Ack()
+	}
+
+	_, err = b.Subscribe(ctx, "test.graceful", fn,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test-graceful-group"),
+		broker.SubscribeBodyOnly(true),
+	)
+	require.NoError(t, err)
+
+	// ждём, пока хендлер стартует
+	select {
+	case <-handlerStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler did not start in time")
+	}
+
+	start := time.Now()
+	require.NoError(t, b.Disconnect(ctx))
+	elapsed := time.Since(start)
+
+	if !handlerCompleted.Load() {
+		t.Fatal("handler was killed before completion — graceful shutdown broken")
+	}
+	if elapsed < handlerDuration/2 {
+		t.Fatalf("Unsubscribe returned too fast (%v) — handler likely not waited", elapsed)
+	}
+	t.Logf("Unsubscribe waited %v for handler (handler took %v)", elapsed, handlerDuration)
+}
+
 func TestBrokerErrors_ReachHandler(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

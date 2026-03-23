@@ -362,25 +362,39 @@ func (k *Broker) Disconnect(ctx context.Context) error {
 	ctx, span = k.opts.Tracer.Start(ctx, "Disconnect")
 	defer span.Finish()
 
-	k.mu.Lock()
-	defer k.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		for _, sub := range k.subs {
-			if sub.closed.Load() {
-				continue
-			}
-			if err := sub.Unsubscribe(ctx); err != nil {
-				return err
-			}
-		}
-		if k.c != nil {
-			k.c.CloseAllowingRebalance()
-			// k.c.Close()
-		}
 	}
+
+	k.mu.RLock()
+	subs := make([]*Subscriber, len(k.subs))
+	copy(subs, k.subs)
+	k.mu.RUnlock()
+
+	for _, sub := range subs {
+		sub.draining.Store(true) // in the process of stopping
+	}
+
+	var wg sync.WaitGroup
+	for _, sub := range subs {
+		if sub.closed.Load() {
+			continue
+		}
+		wg.Add(1)
+		go func(s *Subscriber) {
+			defer wg.Done()
+			_ = s.Unsubscribe(ctx)
+		}(sub)
+	}
+	wg.Wait()
+
+	k.mu.Lock()
+	if k.c != nil {
+		k.c.CloseAllowingRebalance()
+	}
+	k.mu.Unlock()
 
 	k.connected.Store(0)
 	return nil
@@ -649,7 +663,7 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 	sub.c = c
 	sub.htracer = htracer
 
-	go sub.poll(ctx)
+	go sub.poll(sub.kopts.Context)
 
 	b.mu.Lock()
 	active := b.subs[:0]
