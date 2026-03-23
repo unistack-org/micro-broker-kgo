@@ -401,18 +401,18 @@ func (pc *consumer) newErrorMessage(err error, t string, p int32) *kgoMessage {
 	return pm
 }
 
-func (c *consumer) trySend(ftp kgo.FetchTopicPartition) {
+func (pc *consumer) trySend(ftp kgo.FetchTopicPartition) {
 	select {
-	case c.recs <- ftp:
-	case <-c.ctx.Done():
+	case pc.recs <- ftp:
+	case <-pc.ctx.Done():
 	default:
 	}
 }
 
-func (c *consumer) tryErrSend(err error) {
+func (pc *consumer) tryErrSend(err error) {
 	select {
-	case c.errs <- err:
-	case <-c.ctx.Done():
+	case pc.errs <- err:
+	case <-pc.ctx.Done():
 	default:
 	}
 }
