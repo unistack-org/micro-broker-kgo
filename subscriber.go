@@ -2,10 +2,11 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"go.unistack.org/micro/v4/tracer"
 )
 
+const errDebounceInterval = 5 * time.Second
+
 type tp struct {
 	t string
 	p int32
@@ -28,31 +31,17 @@ type consumer struct {
 	topic       string
 	c           *kgo.Client
 	htracer     *hookTracer
-	quit        chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
 	done        chan struct{}
 	recs        chan kgo.FetchTopicPartition
+	errs        chan error
 	kopts       broker.Options
 	partition   int32
 	opts        broker.SubscribeOptions
 	handler     interface{}
 	connected   *atomic.Uint32
 	messagePool bool
-}
-
-type Subscriber struct {
-	consumers    map[tp]*consumer
-	c            *kgo.Client
-	htracer      *hookTracer
-	topic        string
-	messagePool  bool
-	handler      interface{}
-	done         chan struct{}
-	kopts        broker.Options
-	opts         broker.SubscribeOptions
-	connected    *atomic.Uint32
-	mu           sync.RWMutex
-	closed       bool
-	fatalOnError bool
 }
 
 func (s *Subscriber) Client() *kgo.Client {
@@ -68,22 +57,19 @@ func (s *Subscriber) Topic() string {
 }
 
 func (s *Subscriber) Unsubscribe(ctx context.Context) error {
-	if s.closed {
+	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
 	s.c.PauseFetchTopics(s.topic)
 	s.c.CloseAllowingRebalance()
 	kc := make(map[string][]int32)
-	for ctp := range s.consumers {
-		kc[ctp.t] = append(kc[ctp.t], ctp.p)
-	}
+	s.rangeConsumers(func(key tp, _ *consumer) bool {
+		kc[key.t] = append(kc[key.t], key.p)
+		return true
+	})
 	s.killConsumers(ctx, kc)
-	s.mu.Lock()
 	close(s.done)
-	s.closed = true
-	s.mu.Unlock()
-	s.c.ResumeFetchTopics(s.topic)
 
 	return nil
 }
@@ -106,37 +92,29 @@ func (s *Subscriber) poll(ctx context.Context) {
 			return
 		default:
 			fetches := s.c.PollRecords(ctx, maxInflight)
-			if !s.closed && fetches.IsClientClosed() {
-				s.closed = true
-				s.mu.Lock()
-				tpc := make(map[tp]*consumer, len(s.consumers))
-				maps.Copy(tpc, s.consumers)
-				s.mu.Unlock()
+			if s.closed.Load() {
+				s.c.AllowRebalance()
+				return
+			}
+			if fetches.IsClientClosed() {
+				s.closed.Store(true)
+				tpc := s.copyConsumers()
 				for tp, c := range tpc {
 					if c != nil {
-						c.recs <- newErrorFetchTopicPartition(kgo.ErrClientClosed, tp.t, tp.p)
+						c.trySend(newErrorFetchTopicPartition(kgo.ErrClientClosed, tp.t, tp.p))
 					}
 				}
 				return
 			}
 			fetches.EachError(func(t string, p int32, err error) {
-				tps := tp{t, p}
-				s.mu.RLock()
-				c := s.consumers[tps]
-				s.mu.RUnlock()
+				c := s.getConsumer(tp{t, p})
 				if c != nil {
-					c.recs <- newErrorFetchTopicPartition(err, t, p)
+					c.trySend(newErrorFetchTopicPartition(err, t, p))
 				}
 			})
 
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-				tps := tp{p.Topic, p.Partition}
-				s.mu.RLock()
-				c := s.consumers[tps]
-				s.mu.RUnlock()
-				if c != nil {
-					c.recs <- p
-				}
+				s.sendToConsumer(tp{p.Topic, p.Partition}, p)
 			})
 			s.c.AllowRebalance()
 		}
@@ -150,12 +128,7 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	for topic, partitions := range lost {
 		for _, partition := range partitions {
 			tps := tp{topic, partition}
-			s.mu.Lock()
-			pc, ok := s.consumers[tps]
-			if ok {
-				delete(s.consumers, tps)
-			}
-			s.mu.Unlock()
+			pc, ok := s.deleteConsumer(tps)
 			if !ok || pc == nil {
 				continue
 			}
@@ -164,7 +137,7 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 				s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] killing consumer topic %s partition %d", topic, partition))
 			}
 
-			close(pc.quit)
+			pc.cancel()
 
 			wg.Add(1)
 			go func(c *consumer, t string, p int32) {
@@ -188,26 +161,21 @@ func (s *Subscriber) killConsumers(ctx context.Context, lost map[string][]int32)
 	}
 }
 
-func (s *Subscriber) autocommit(_ *kgo.Client, r *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
-	if err != nil {
-		s.mu.Lock()
-		tpc := make(map[tp]*consumer, len(s.consumers))
-		maps.Copy(tpc, s.consumers)
-		s.mu.Unlock()
-
-		for _, tc := range r.Topics {
-			for _, c := range s.consumers {
-				if c != nil {
-					for _, p := range tc.Partitions {
-						c.recs <- newErrorFetchTopicPartition(err, tc.Topic, p.Partition)
-					}
-				}
-			}
-		}
+func (s *Subscriber) autocommit(_ *kgo.Client, _ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+	if err == nil {
+		return
+	}
+	if s.closed.Load() {
+		return
+	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incCommitError()
+	if s.shouldSendErr(err) {
+		s.notifyConsumers(err)
 	}
 }
 
 func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]int32) {
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("lost")
 	if s.kopts.Logger.V(logger.ErrorLevel) {
 		s.kopts.Logger.Error(ctx, fmt.Sprintf("[kgo] lost %#+v", lost))
 	}
@@ -215,43 +183,46 @@ func (s *Subscriber) lost(ctx context.Context, _ *kgo.Client, lost map[string][]
 }
 
 func (s *Subscriber) revoked(ctx context.Context, c *kgo.Client, revoked map[string][]int32) {
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("revoked")
 	if s.kopts.Logger.V(logger.DebugLevel) {
 		s.kopts.Logger.Debug(ctx, fmt.Sprintf("[kgo] revoked %#+v", revoked))
 	}
+	s.killConsumers(ctx, revoked)
 	if err := c.CommitMarkedOffsets(ctx); err != nil {
-		s.mu.Lock()
-		tpc := make(map[tp]*consumer, len(s.consumers))
-		maps.Copy(tpc, s.consumers)
-		s.mu.Unlock()
-		for tp, c := range tpc {
+		tpc := s.copyConsumers()
+		for _, c := range tpc {
 			if c != nil {
-				c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
+				c.tryErrSend(err)
 			}
 		}
 	}
-	s.killConsumers(ctx, revoked)
 }
 
 func (s *Subscriber) assigned(_ context.Context, c *kgo.Client, assigned map[string][]int32) {
+	if s.closed.Load() || s.draining.Load() {
+		return
+	}
+	subscribeMetrics{m: s.kopts.Meter, topic: s.topic}.incRebalance("assigned")
 	for topic, partitions := range assigned {
 		for _, partition := range partitions {
+			ctx, cancel := context.WithCancel(s.kopts.Context)
 			pc := &consumer{
 				c:           c,
 				topic:       topic,
 				partition:   partition,
 				htracer:     s.htracer,
-				quit:        make(chan struct{}),
+				ctx:         ctx,
+				cancel:      cancel,
 				done:        make(chan struct{}),
 				recs:        make(chan kgo.FetchTopicPartition, 100),
+				errs:        make(chan error, 8),
 				handler:     s.handler,
 				messagePool: s.messagePool,
 				kopts:       s.kopts,
 				opts:        s.opts,
 				connected:   s.connected,
 			}
-			s.mu.Lock()
-			s.consumers[tp{topic, partition}] = pc
-			s.mu.Unlock()
+			s.setConsumer(tp{topic, partition}, pc)
 			go pc.consume()
 		}
 	}
@@ -261,6 +232,7 @@ func (pc *consumer) consume() {
 	var err error
 
 	defer close(pc.done)
+	defer pc.cancel()
 	if pc.kopts.Logger.V(logger.DebugLevel) {
 		pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("starting, topic %s partition %d", pc.topic, pc.partition))
 		defer pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("killing, topic %s partition %d", pc.topic, pc.partition))
@@ -268,10 +240,24 @@ func (pc *consumer) consume() {
 
 	var pm *kgoMessage
 
+	subMetrics := subscribeMetrics{m: pc.kopts.Meter, topic: pc.topic}
+
 	for {
 		select {
-		case <-pc.quit:
+		case <-pc.ctx.Done():
 			return
+		case err := <-pc.errs:
+			pm = pc.newErrorMessage(err, pc.topic, pc.partition)
+			switch h := pc.handler.(type) {
+			case func(broker.Message) error:
+				_ = h(pm)
+			case func([]broker.Message) error:
+				_ = h([]broker.Message{pm})
+			}
+			if pc.messagePool {
+				messagePool.Put(pm)
+			}
+			// non-fatal: continue processing
 		case p, ok := <-pc.recs:
 			if !ok {
 				return
@@ -299,7 +285,7 @@ func (pc *consumer) consume() {
 
 			for _, record := range p.Records {
 				select {
-				case <-pc.quit:
+				case <-pc.ctx.Done():
 					return
 				default:
 				}
@@ -329,39 +315,37 @@ func (pc *consumer) consume() {
 				pm.hdr.Set("Micro-Key", string(record.Key))
 				pm.hdr.Set("Micro-Timestamp", strconv.FormatInt(record.Timestamp.Unix(), 10))
 
-				processCtx, cancel := context.WithTimeout(ctx, pc.kopts.GracefulTimeout)
-				errChan := make(chan error, 1)
-
-				go func() {
-					switch h := pc.handler.(type) {
-					case func(broker.Message) error:
-						errChan <- h(pm)
-					case func([]broker.Message) error:
-						errChan <- h([]broker.Message{pm})
-					}
-				}()
-
-				select {
-				case err = <-errChan:
-				case <-processCtx.Done():
-					//err = fmt.Errorf("[kgo] message processing timeout topic %s partition %d offset %d", record.Topic, record.Partition, record.Offset)
-					err = processCtx.Err()
+				ct := pm.hdr.GetJoined(metadata.HeaderContentType)
+				if ct == "" {
+					ct = pc.kopts.ContentType
 				}
-				cancel()
+				if idx := strings.IndexRune(ct, ';'); idx >= 0 {
+					ct = ct[:idx]
+				}
+				pm.c = pc.kopts.Codecs[ct]
+
+				switch h := pc.handler.(type) {
+				case func(broker.Message) error:
+					err = h(pm)
+				case func([]broker.Message) error:
+					err = h([]broker.Message{pm})
+				}
 
 				pc.kopts.Meter.Counter(semconv.SubscribeMessageInflight, "endpoint", record.Topic, "topic", record.Topic).Dec()
 				if err != nil {
 					if sp != nil {
 						sp.SetStatus(tracer.SpanStatusError, err.Error())
 					}
-					pc.kopts.Meter.Counter(semconv.SubscribeMessageTotal, "endpoint", record.Topic, "topic", record.Topic, "status", "failure").Inc()
-				} else if pc.opts.AutoAck {
-					pm.ack = true
+					subMetrics.incTotal("failure")
+				} else {
+					subMetrics.incTotal("success")
+					if pc.opts.AutoAck {
+						pm.ack = true
+					}
 				}
 
 				te := time.Since(ts)
-				pc.kopts.Meter.Summary(semconv.SubscribeMessageLatencyMicroseconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
-				pc.kopts.Meter.Histogram(semconv.SubscribeMessageDurationSeconds, "endpoint", record.Topic, "topic", record.Topic).Update(te.Seconds())
+				subMetrics.recordLatency(te)
 
 				ack := pm.ack
 				if pc.messagePool {
@@ -379,6 +363,7 @@ func (pc *consumer) consume() {
 
 				pc.kopts.Logger.Debug(pc.kopts.Context, fmt.Sprintf("[kgo] message not acknowledged topic %s partition %d offset %d", record.Topic, record.Partition, record.Offset))
 
+				subMetrics.incLost()
 				pm := pc.newErrorMessage(ErrLostMessage, p.Topic, p.Partition)
 				switch h := pc.handler.(type) {
 				case func(broker.Message) error:
@@ -416,6 +401,45 @@ func (pc *consumer) newErrorMessage(err error, t string, p int32) *kgoMessage {
 	return pm
 }
 
+func (pc *consumer) trySend(ftp kgo.FetchTopicPartition) {
+	select {
+	case pc.recs <- ftp:
+	case <-pc.ctx.Done():
+	default:
+	}
+}
+
+func (pc *consumer) tryErrSend(err error) {
+	select {
+	case pc.errs <- err:
+	case <-pc.ctx.Done():
+	default:
+	}
+}
+
+func (s *Subscriber) shouldSendErr(err error) bool {
+	if isContextError(err) {
+		return false
+	}
+	s.lastErrMu.Lock()
+	defer s.lastErrMu.Unlock()
+	if errors.Is(err, s.lastErr) && time.Since(s.lastErrTime) < errDebounceInterval {
+		return false
+	}
+	s.lastErr = err
+	s.lastErrTime = time.Now()
+	return true
+}
+
+func (s *Subscriber) notifyConsumers(err error) {
+	tpc := s.copyConsumers()
+	for _, c := range tpc {
+		if c != nil {
+			c.tryErrSend(err)
+		}
+	}
+}
+
 func newErrorFetchTopicPartition(err error, t string, p int32) kgo.FetchTopicPartition {
 	return kgo.FetchTopicPartition{
 		Topic: t,
@@ -439,76 +463,34 @@ func (s *Subscriber) OnGroupManageError(err error) {
 	if err == nil {
 		return
 	}
-	s.mu.Lock()
-	tpc := make(map[tp]*consumer, len(s.consumers))
-	maps.Copy(tpc, s.consumers)
-	s.mu.Unlock()
-	for tp, c := range tpc {
-		if c != nil {
-			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
-		}
+	if s.shouldSendErr(err) {
+		s.notifyConsumers(err)
 	}
 }
 
 func (s *Subscriber) OnBrokerConnect(_ kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
-	if err == nil {
+	if err == nil || !s.shouldSendErr(err) {
 		return
 	}
-	s.mu.Lock()
-	tpc := make(map[tp]*consumer, len(s.consumers))
-	maps.Copy(tpc, s.consumers)
-	s.mu.Unlock()
-	for tp, c := range tpc {
-		if c != nil {
-			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
-		}
-	}
+	s.notifyConsumers(err)
 }
 
 func (s *Subscriber) OnBrokerDisconnect(_ kgo.BrokerMetadata, _ net.Conn) {
 }
 
 func (s *Subscriber) OnBrokerWrite(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil {
+	if err == nil || !s.shouldSendErr(err) {
 		return
 	}
-	s.mu.Lock()
-	tpc := make(map[tp]*consumer, len(s.consumers))
-	maps.Copy(tpc, s.consumers)
-	s.mu.Unlock()
-	for tp, c := range tpc {
-		if c != nil {
-			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
-		}
-	}
+	s.notifyConsumers(err)
 }
 
 func (s *Subscriber) OnBrokerRead(_ kgo.BrokerMetadata, _ int16, _ int, _ time.Duration, _ time.Duration, err error) {
-	if err == nil {
+	if err == nil || !s.shouldSendErr(err) {
 		return
 	}
-	s.mu.Lock()
-	tpc := make(map[tp]*consumer, len(s.consumers))
-	maps.Copy(tpc, s.consumers)
-	s.mu.Unlock()
-	for tp, c := range tpc {
-		if c != nil {
-			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
-		}
-	}
+	s.notifyConsumers(err)
 }
 
-func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, err error) {
-	if err == nil {
-		return
-	}
-	s.mu.Lock()
-	tpc := make(map[tp]*consumer, len(s.consumers))
-	maps.Copy(tpc, s.consumers)
-	s.mu.Unlock()
-	for tp, c := range tpc {
-		if c != nil {
-			c.recs <- newErrorFetchTopicPartition(err, tp.t, tp.p)
-		}
-	}
+func (s *Subscriber) OnProduceRecordUnbuffered(_ *kgo.Record, _ error) {
 }

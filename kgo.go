@@ -80,28 +80,28 @@ type Broker struct {
 	init bool
 }
 
-func (r *Broker) Live() bool {
-	return r.connected.Load() == 1
+func (b *Broker) Live() bool {
+	return b.connected.Load() == 1
 }
 
-func (r *Broker) Ready() bool {
-	return r.connected.Load() == 1
+func (b *Broker) Ready() bool {
+	return b.connected.Load() == 1
 }
 
-func (r *Broker) Health() bool {
-	return r.connected.Load() == 1
+func (b *Broker) Health() bool {
+	return b.connected.Load() == 1
 }
 
-func (k *Broker) Address() string {
-	return strings.Join(k.opts.Addrs, ",")
+func (b *Broker) Address() string {
+	return strings.Join(b.opts.Addrs, ",")
 }
 
-func (k *Broker) Name() string {
-	return k.opts.Name
+func (b *Broker) Name() string {
+	return b.opts.Name
 }
 
-func (k *Broker) Client() *kgo.Client {
-	return k.c
+func (b *Broker) Client() *kgo.Client {
+	return b.c
 }
 
 type kgoMessage struct {
@@ -133,7 +133,7 @@ func (m *kgoMessage) Context() context.Context {
 }
 
 func (m *kgoMessage) Topic() string {
-	return ""
+	return m.topic
 }
 
 func (m *kgoMessage) Error() error {
@@ -177,35 +177,35 @@ func (b *Broker) NewMessage(ctx context.Context, hdr metadata.Metadata, body int
 	return m, nil
 }
 
-func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *hookTracer, error) {
-	var c *kgo.Client
+func (b *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *hookTracer, error) {
+	var ckgo *kgo.Client
 	var err error
 
 	sp, _ := tracer.SpanFromContext(ctx)
 
 	clientID := "kgo"
 	group := ""
-	if k.opts.Context != nil {
-		if id, ok := k.opts.Context.Value(clientIDKey{}).(string); ok {
+	if b.opts.Context != nil {
+		if id, ok := b.opts.Context.Value(clientIDKey{}).(string); ok {
 			clientID = id
 		}
-		if id, ok := k.opts.Context.Value(groupKey{}).(string); ok {
+		if id, ok := b.opts.Context.Value(groupKey{}).(string); ok {
 			group = id
 		}
 	}
 
 	var fatalOnError bool
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
 			fatalOnError = v
 		}
 	}
 
-	htracer := &hookTracer{group: group, clientID: clientID, tracer: k.opts.Tracer}
+	htracer := &hookTracer{group: group, clientID: clientID, tracer: b.opts.Tracer}
 	opts = append(opts,
-		kgo.WithHooks(&hookMeter{meter: k.opts.Meter}),
+		kgo.WithHooks(&hookMeter{meter: b.opts.Meter}),
 		kgo.WithHooks(htracer),
-		kgo.WithHooks(&hookEvent{log: k.opts.Logger, fatalOnError: fatalOnError, connected: k.connected}),
+		kgo.WithHooks(&hookEvent{log: b.opts.Logger, fatalOnError: fatalOnError, connected: b.connected}),
 	)
 
 	select {
@@ -217,9 +217,9 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 		}
 		return nil, nil, ctx.Err()
 	default:
-		c, err = kgo.NewClient(opts...)
+		ckgo, err = kgo.NewClient(opts...)
 		if err == nil {
-			err = c.Ping(ctx) // check connectivity to cluster
+			err = ckgo.Ping(ctx) // check connectivity to cluster
 		}
 		if err != nil {
 			if sp != nil {
@@ -227,183 +227,229 @@ func (k *Broker) connect(ctx context.Context, opts ...kgo.Opt) (*kgo.Client, *ho
 			}
 			return nil, nil, err
 		}
-		k.connected.Store(1)
-		return c, htracer, nil
+		return ckgo, htracer, nil
 	}
 }
 
-func (k *Broker) Connect(ctx context.Context) error {
-	if k.connected.Load() == 1 {
+func (b *Broker) Connect(ctx context.Context) error {
+	if b.connected.Load() == 1 {
 		return nil
 	}
 
-	nctx := k.opts.Context
+	nctx := b.opts.Context
 	if ctx != nil {
 		nctx = ctx
 	}
 
-	c, _, err := k.connect(nctx, k.kopts...)
+	c, _, err := b.connect(nctx, b.kopts...)
 	if err != nil {
 		return err
 	}
 
-	k.mu.Lock()
-	k.c = c
-	k.connected.Store(1)
-	k.mu.Unlock()
+	b.mu.Lock()
+	if b.c != nil {
+		// another goroutine connected concurrently
+		b.mu.Unlock()
+		c.CloseAllowingRebalance()
+		return nil
+	}
+	b.c = c
+	b.connected.Store(1)
+	b.mu.Unlock()
 
 	exposeLag := false
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(exposeLagKey{}).(bool); ok && v {
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(exposeLagKey{}).(bool); ok && v {
 			exposeLag = v
 		}
 	}
 
 	if exposeLag {
-		var mu sync.Mutex
-		var lastUpdate time.Time
-		type pl struct {
-			p string
-			l float64
-		}
+		var (
+			mu          sync.Mutex
+			lagValues   = make(map[string]float64)
+			lagReg      = make(map[string]bool)
+			lastUpdated time.Time
+			refreshing  bool
+		)
+		ac := kadm.NewClient(b.c)
 
-		lag := make(map[string]map[string]pl) // topic => group => partition => lag
-		ac := kadm.NewClient(k.c)
-
-		updateStats := func() {
+		var refresh func()
+		refresh = func() {
 			mu.Lock()
-			if time.Since(lastUpdate) < DefaultStatsInterval {
+			if refreshing || time.Since(lastUpdated) < DefaultStatsInterval {
+				mu.Unlock()
 				return
 			}
+			refreshing = true
 			mu.Unlock()
 
-			k.mu.Lock()
-			groups := make([]string, 0, len(k.subs))
-			for _, g := range k.subs {
-				groups = append(groups, g.opts.Group)
-			}
-			k.mu.Unlock()
+			defer func() {
+				mu.Lock()
+				refreshing = false
+				mu.Unlock()
+			}()
 
-			dgls, err := ac.Lag(ctx, groups...)
-			if err != nil || !dgls.Ok() {
-				k.opts.Logger.Error(k.opts.Context, "kgo describe group lag error", err)
+			b.mu.RLock()
+			groups := make([]string, 0, len(b.subs))
+			for _, s := range b.subs {
+				groups = append(groups, s.opts.Group)
+			}
+			b.mu.RUnlock()
+
+			if len(groups) == 0 {
 				return
 			}
 
+			dgls, err := ac.Lag(b.opts.Context, groups...)
+			if err != nil || !dgls.Ok() {
+				b.opts.Logger.Error(b.opts.Context, "kgo describe group lag error", err)
+				return
+			}
+
+			type entry struct{ key, tn, gn, ps string }
+			var newEntries []entry
+
+			mu.Lock()
+			lastUpdated = time.Now()
 			for gn, dgl := range dgls {
 				for tn, lmap := range dgl.Lag {
-					if _, ok := lag[tn]; !ok {
-						lag[tn] = make(map[string]pl)
-					}
 					for p, l := range lmap {
-						lag[tn][gn] = pl{p: strconv.Itoa(int(p)), l: float64(l.Lag)}
+						ps := strconv.Itoa(int(p))
+						key := tn + "/" + gn + "/" + ps
+						lagValues[key] = float64(l.Lag)
+						if !lagReg[key] {
+							lagReg[key] = true
+							newEntries = append(newEntries, entry{key, tn, gn, ps})
+						}
 					}
 				}
 			}
-		}
+			mu.Unlock()
 
-		for tn, dg := range lag {
-			for gn, gl := range dg {
-				k.opts.Meter.Gauge(semconv.BrokerGroupLag,
-					func() float64 { updateStats(); return gl.l },
-					"topic", tn,
-					"group", gn,
-					"partition", gl.p)
+			for _, e := range newEntries {
+				key := e.key
+				b.opts.Meter.Gauge(semconv.BrokerGroupLag,
+					func() float64 {
+						refresh()
+						mu.Lock()
+						v := lagValues[key]
+						mu.Unlock()
+						return v
+					},
+					"topic", e.tn,
+					"group", e.gn,
+					"partition", e.ps,
+				)
 			}
 		}
 
+		go refresh()
 	}
 
 	return nil
 }
 
-func (k *Broker) Disconnect(ctx context.Context) error {
-	if k.connected.Load() == 0 {
+func (b *Broker) Disconnect(ctx context.Context) error {
+	if b.connected.Load() == 0 {
 		return nil
 	}
 
-	nctx := k.opts.Context
-	if ctx != nil {
-		nctx = ctx
+	if ctx == nil {
+		ctx = b.opts.Context
 	}
 	var span tracer.Span
-	ctx, span = k.opts.Tracer.Start(ctx, "Disconnect")
+	ctx, span = b.opts.Tracer.Start(ctx, "Disconnect")
 	defer span.Finish()
 
-	k.mu.Lock()
-	defer k.mu.Unlock()
 	select {
-	case <-nctx.Done():
-		return nctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
 	default:
-		for _, sub := range k.subs {
-			if sub.closed {
-				continue
-			}
-			if err := sub.Unsubscribe(ctx); err != nil {
-				return err
-			}
-		}
-		if k.c != nil {
-			k.c.CloseAllowingRebalance()
-			// k.c.Close()
-		}
 	}
 
-	k.connected.Store(0)
+	b.mu.RLock()
+	subs := make([]*Subscriber, len(b.subs))
+	copy(subs, b.subs)
+	b.mu.RUnlock()
+
+	for _, sub := range subs {
+		sub.draining.Store(true) // in the process of stopping
+	}
+
+	var wg sync.WaitGroup
+	for _, sub := range subs {
+		if sub.closed.Load() {
+			continue
+		}
+		wg.Add(1)
+		go func(s *Subscriber) {
+			defer wg.Done()
+			_ = s.Unsubscribe(ctx)
+		}(sub)
+	}
+	wg.Wait()
+
+	b.mu.Lock()
+	if b.c != nil {
+		b.c.CloseAllowingRebalance()
+	}
+	b.mu.Unlock()
+
+	b.connected.Store(0)
 	return nil
 }
 
-func (k *Broker) Init(opts ...broker.Option) error {
-	k.mu.Lock()
-	defer k.mu.Unlock()
+func (b *Broker) Init(opts ...broker.Option) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	if len(opts) == 0 && k.init {
+	if len(opts) == 0 && b.init {
 		return nil
 	}
 
 	for _, o := range opts {
-		o(&k.opts)
+		o(&b.opts)
 	}
 
-	if err := k.opts.Register.Init(); err != nil {
+	if err := b.opts.Register.Init(); err != nil {
 		return err
 	}
-	if err := k.opts.Tracer.Init(); err != nil {
+	if err := b.opts.Tracer.Init(); err != nil {
 		return err
 	}
-	if err := k.opts.Logger.Init(); err != nil {
+	if err := b.opts.Logger.Init(); err != nil {
 		return err
 	}
-	if err := k.opts.Meter.Init(); err != nil {
+	if err := b.opts.Meter.Init(); err != nil {
 		return err
 	}
 
-	if k.opts.Context != nil {
-		if v, ok := k.opts.Context.Value(optionsKey{}).([]kgo.Opt); ok && len(v) > 0 {
-			k.kopts = append(k.kopts, v...)
+	if b.opts.Context != nil {
+		if v, ok := b.opts.Context.Value(optionsKey{}).([]kgo.Opt); ok && len(v) > 0 {
+			b.kopts = append(b.kopts, v...)
 		}
 	}
 
-	k.funcPublish = k.fnPublish
-	k.funcSubscribe = k.fnSubscribe
+	b.funcPublish = b.fnPublish
+	b.funcSubscribe = b.fnSubscribe
 
-	k.opts.Hooks.EachPrev(func(hook options.Hook) {
+	b.opts.Hooks.EachPrev(func(hook options.Hook) {
 		switch h := hook.(type) {
 		case broker.HookPublish:
-			k.funcPublish = h(k.funcPublish)
+			b.funcPublish = h(b.funcPublish)
 		case broker.HookSubscribe:
-			k.funcSubscribe = h(k.funcSubscribe)
+			b.funcSubscribe = h(b.funcSubscribe)
 		}
 	})
 
-	k.init = true
+	b.init = true
 
 	return nil
 }
 
-func (k *Broker) Options() broker.Options {
-	return k.opts
+func (b *Broker) Options() broker.Options {
+	return b.opts
 }
 
 func (b *Broker) Publish(ctx context.Context, topic string, messages ...broker.Message) error {
@@ -474,19 +520,24 @@ func (b *Broker) publish(ctx context.Context, topic string, messages ...broker.M
 	if len(records) > 0 {
 		var errs []string
 		ts := time.Now()
-		b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", topic, "topic", topic).Set(uint64(len(records)))
+		inflightCtr := b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", topic, "topic", topic)
+		inflightCtr.Add(len(records))
 		results := b.c.ProduceSync(ctx, records...)
 		te := time.Since(ts)
 		for _, result := range results {
+			inflightCtr.Dec()
 			b.opts.Meter.Summary(semconv.PublishMessageLatencyMicroseconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
 			b.opts.Meter.Histogram(semconv.PublishMessageDurationSeconds, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Update(te.Seconds())
-			b.opts.Meter.Counter(semconv.PublishMessageInflight, "endpoint", result.Record.Topic, "topic", result.Record.Topic).Dec()
 			if result.Err != nil {
 				b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "failure").Inc()
 				errs = append(errs, result.Err.Error())
 			} else {
 				b.opts.Meter.Counter(semconv.PublishMessageTotal, "endpoint", result.Record.Topic, "topic", result.Record.Topic, "status", "success").Inc()
 			}
+		}
+		// Ensure inflight counter is balanced even if results count diverges from records count.
+		if remaining := len(records) - len(results); remaining > 0 {
+			inflightCtr.Add(-remaining)
 		}
 
 		if len(errs) > 0 {
@@ -497,13 +548,13 @@ func (b *Broker) publish(ctx context.Context, topic string, messages ...broker.M
 	return nil
 }
 
-func (k *Broker) TopicExists(ctx context.Context, topic string) error {
+func (b *Broker) TopicExists(ctx context.Context, topic string) error {
 	mdreq := kmsg.NewMetadataRequest()
 	mdreq.Topics = []kmsg.MetadataRequestTopic{
 		{Topic: &topic},
 	}
 
-	mdrsp, err := mdreq.RequestWith(ctx, k.c)
+	mdrsp, err := mdreq.RequestWith(ctx, b.c)
 	if err != nil {
 		return err
 	} else if mdrsp.Topics[0].ErrorCode != 0 {
@@ -539,14 +590,14 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 		}
 	}
 
-	var messagePool bool
+	var useMessagePool bool
 	var fatalOnError bool
 	if b.opts.Context != nil {
 		if v, ok := b.opts.Context.Value(fatalOnErrorKey{}).(bool); ok && v {
 			fatalOnError = v
 		}
 		if v, ok := b.opts.Context.Value(subscribeMessagePoolKey{}).(bool); ok && v {
-			messagePool = v
+			useMessagePool = v
 		}
 	}
 
@@ -561,12 +612,12 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 		opts:         options,
 		handler:      handler,
 		kopts:        b.opts,
-		consumers:    make(map[tp]*consumer),
 		done:         make(chan struct{}),
 		fatalOnError: fatalOnError,
 		connected:    b.connected,
-		messagePool:  messagePool,
+		messagePool:  useMessagePool,
 	}
+	sub.initConsumers()
 
 	kopts := append(
 		[]kgo.Opt{
@@ -612,16 +663,22 @@ func (b *Broker) fnSubscribe(ctx context.Context, topic string, handler interfac
 	sub.c = c
 	sub.htracer = htracer
 
-	go sub.poll(ctx)
+	go sub.poll(sub.kopts.Context)
 
 	b.mu.Lock()
-	b.subs = append(b.subs, sub)
+	active := b.subs[:0]
+	for _, s := range b.subs {
+		if !s.closed.Load() {
+			active = append(active, s)
+		}
+	}
+	b.subs = append(active, sub)
 	b.mu.Unlock()
 
 	return sub, nil
 }
 
-func (k *Broker) String() string {
+func (b *Broker) String() string {
 	return "kgo"
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
 	kg "github.com/twmb/franz-go/pkg/kgo"
 	kgo "go.unistack.org/micro-broker-kgo/v4"
@@ -297,35 +298,29 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 
 	done := make(chan struct{})
 
-	h1 := func(msg broker.Message) error {
-		time.Sleep(2 * time.Millisecond)
-
-		atomic.AddInt64(&processed, 1)
-		atomic.AddInt64(&c1Count, 1)
-
-		if atomic.LoadInt64(&processed) >= total {
+	tryClose := func() {
+		if atomic.LoadInt64(&processed) >= total && atomic.LoadInt64(&c2Count) > 0 {
 			select {
 			case <-done:
 			default:
 				close(done)
 			}
 		}
+	}
+
+	h1 := func(msg broker.Message) error {
+		time.Sleep(2 * time.Millisecond)
+		atomic.AddInt64(&processed, 1)
+		atomic.AddInt64(&c1Count, 1)
+		tryClose()
 		return msg.Ack()
 	}
 
 	h2 := func(msg broker.Message) error {
 		time.Sleep(2 * time.Millisecond)
-
 		atomic.AddInt64(&processed, 1)
 		atomic.AddInt64(&c2Count, 1)
-
-		if atomic.LoadInt64(&processed) >= total {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
-		}
+		tryClose()
 		return msg.Ack()
 	}
 
@@ -340,7 +335,7 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 	defer func() { _ = sub1.Unsubscribe(context.Background()) }()
 
 	go func() {
-		for atomic.LoadInt64(&processed) < total {
+		for atomic.LoadInt64(&processed) < total || atomic.LoadInt64(&c2Count) == 0 {
 			batchSize := int64(10)
 			msgs := make([]broker.Message, 0, batchSize)
 			for i := int64(0); i < batchSize; i++ {
@@ -379,8 +374,8 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 		)
 	}
 
-	if got := atomic.LoadInt64(&processed); got != total {
-		t.Fatalf("processed %d, want %d", got, total)
+	if got := atomic.LoadInt64(&processed); got < total {
+		t.Fatalf("processed %d, want >= %d", got, total)
 	}
 
 	if atomic.LoadInt64(&c1Count) == 0 {
@@ -388,5 +383,120 @@ func TestKillConsumers_E2E_Rebalance(t *testing.T) {
 	}
 	if atomic.LoadInt64(&c2Count) == 0 {
 		t.Fatalf("consumer2 did not process any messages (rebalance/killConsumers likely broken)")
+	}
+}
+
+func TestGracefulShutdown_HandlersComplete(t *testing.T) {
+	ctx := context.Background()
+
+	const handlerDuration = 3 * time.Second
+	const gracefulTimeout = 5 * time.Second
+
+	b := kgo.NewBroker(
+		broker.ContentType("application/octet-stream"),
+		broker.Codec("application/octet-stream", codec.NewCodec()),
+		broker.Addrs(cluster.ListenAddrs()...),
+		broker.GracefulTimeout(gracefulTimeout),
+		kgo.CommitInterval(5*time.Second),
+		kgo.Options(
+			kg.ClientID("test-graceful"),
+			kg.AllowAutoTopicCreation(),
+			kg.MaxBufferedRecords(10),
+		),
+	)
+	require.NoError(t, b.Init())
+	require.NoError(t, b.Connect(ctx))
+
+	m, err := b.NewMessage(ctx, metadata.New(0), []byte("graceful-test"))
+	require.NoError(t, err)
+	require.NoError(t, b.Publish(ctx, "test.graceful", m))
+
+	var handlerCompleted atomic.Bool
+	handlerStarted := make(chan struct{})
+
+	fn := func(msg broker.Message) error {
+		close(handlerStarted)
+		time.Sleep(handlerDuration)
+		handlerCompleted.Store(true)
+		return msg.Ack()
+	}
+
+	_, err = b.Subscribe(ctx, "test.graceful", fn,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test-graceful-group"),
+		broker.SubscribeBodyOnly(true),
+	)
+	require.NoError(t, err)
+
+	// ждём, пока хендлер стартует
+	select {
+	case <-handlerStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler did not start in time")
+	}
+
+	start := time.Now()
+	require.NoError(t, b.Disconnect(ctx))
+	elapsed := time.Since(start)
+
+	if !handlerCompleted.Load() {
+		t.Fatal("handler was killed before completion — graceful shutdown broken")
+	}
+	if elapsed < handlerDuration/2 {
+		t.Fatalf("Unsubscribe returned too fast (%v) — handler likely not waited", elapsed)
+	}
+	t.Logf("Unsubscribe waited %v for handler (handler took %v)", elapsed, handlerDuration)
+}
+
+func TestBrokerErrors_ReachHandler(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCluster := kfake.MustCluster(kfake.AllowAutoTopicCreation())
+
+	b := kgo.NewBroker(
+		broker.ContentType("application/octet-stream"),
+		broker.Codec("application/octet-stream", codec.NewCodec()),
+		broker.Addrs(errCluster.ListenAddrs()...),
+		kgo.CommitInterval(5*time.Second),
+		kgo.Options(
+			kg.ClientID("test-broker-errors"),
+			kg.AllowAutoTopicCreation(),
+		),
+	)
+	require.NoError(t, b.Init())
+	require.NoError(t, b.Connect(ctx))
+	defer func() { _ = b.Disconnect(context.Background()) }()
+
+	type errWrapper struct{ err error }
+	var errReceived atomic.Value
+
+	fn := func(msg broker.Message) error {
+		if km, ok := msg.(interface{ Error() error }); ok && km.Error() != nil {
+			errReceived.Store(errWrapper{km.Error()})
+		}
+		return msg.Ack()
+	}
+
+	sub, err := b.Subscribe(ctx, "test.broker.errors", fn,
+		broker.SubscribeAutoAck(true),
+		broker.SubscribeGroup("test-broker-errors"),
+		broker.SubscribeBodyOnly(true),
+	)
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe(context.Background()) }()
+
+	// ждём, чтобы consumer запустился
+	time.Sleep(500 * time.Millisecond)
+
+	// рвём все соединения — kgo получит io.EOF/net.ErrClosed
+	errCluster.Close()
+
+	require.Eventually(t, func() bool {
+		return errReceived.Load() != nil
+	}, 10*time.Second, 50*time.Millisecond, "handler не получил ошибку брокера после разрыва соединения")
+
+	if w, ok := errReceived.Load().(errWrapper); ok {
+		t.Logf("handler получил ошибку: %v", w.err)
 	}
 }
