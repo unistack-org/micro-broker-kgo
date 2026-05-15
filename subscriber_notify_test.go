@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v4/broker"
-	"go.unistack.org/micro/v4/logger"
+	"go.unistack.org/micro/v5/broker"
+	"go.unistack.org/micro/v5/logger"
 )
 
 // --- shouldSendErr unit tests ---

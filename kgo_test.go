@@ -9,12 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kfake"
 	kg "github.com/twmb/franz-go/pkg/kgo"
-	kgo "go.unistack.org/micro-broker-kgo/v4"
-	"go.unistack.org/micro/v4/broker"
-	"go.unistack.org/micro/v4/codec"
-	"go.unistack.org/micro/v4/logger"
-	"go.unistack.org/micro/v4/logger/slog"
-	"go.unistack.org/micro/v4/metadata"
+	kgo "go.unistack.org/micro-broker-kgo/v5"
+	"go.unistack.org/micro/v5/broker"
+	"go.unistack.org/micro/v5/codec"
+	"go.unistack.org/micro/v5/logger"
+	"go.unistack.org/micro/v5/logger/slog"
+	"go.unistack.org/micro/v5/metadata"
 )
 
 var (

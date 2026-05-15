@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v4/broker"
+	"go.unistack.org/micro/v5/broker"
 )
 
 type Subscriber struct {

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v4/logger"
+	"go.unistack.org/micro/v5/logger"
 )
 
 type mlogger struct {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v4/logger"
+	"go.unistack.org/micro/v5/logger"
 )
 
 func TestHookEvent_OnGroupManageError(t *testing.T) {

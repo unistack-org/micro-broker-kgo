@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.unistack.org/micro/v4/metadata"
+	"go.unistack.org/micro/v5/metadata"
 )
 
 // RecordCarrier injects and extracts traces from a kgo.Record.
